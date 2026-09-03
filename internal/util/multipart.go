@@ -1,55 +1,66 @@
 // internal/util/multipart.go
 package util
 
-import "strings"
+import (
+	"strings"
+)
 
 func ExtractLabels(fileNames []string) []string {
 	if len(fileNames) <= 1 {
 		return []string{""} // No label needed for single files
 	}
-	prefix := getCommonPrefix(fileNames)
-	suffix := getCommonSuffix(fileNames)
 
-	var labels []string
-	for _, name := range fileNames {
-		label := name[len(prefix) : len(name)-len(suffix)]
-		label = strings.Trim(label, "-_ ")
-		if label == "" {
-			label = "Default"
+	// 1. Find the minimum length among all strings to prevent out-of-bounds
+	minLen := len(fileNames[0])
+	for _, name := range fileNames[1:] {
+		if len(name) < minLen {
+			minLen = len(name)
 		}
-		labels = append(labels, label)
 	}
+
+	// 2. Find the length of the common prefix
+	prefixLen := 0
+	for i := 0; i < minLen; i++ {
+		char := fileNames[0][i]
+		match := true
+		for _, name := range fileNames[1:] {
+			if name[i] != char {
+				match = false
+				break
+			}
+		}
+		if !match {
+			break
+		}
+		prefixLen++
+	}
+
+	// 3. Find the length of the common suffix
+	// CRITICAL: maxSuffixLen ensures the suffix never overlaps with the prefix
+	maxSuffixLen := minLen - prefixLen
+	suffixLen := 0
+	for i := 0; i < maxSuffixLen; i++ {
+		// Compare characters starting from the end of the strings
+		char := fileNames[0][len(fileNames[0])-1-i]
+		match := true
+		for _, name := range fileNames[1:] {
+			if name[len(name)-1-i] != char {
+				match = false
+				break
+			}
+		}
+		if !match {
+			break
+		}
+		suffixLen++
+	}
+
+	// 4. Extract and trim labels
+	labels := make([]string, len(fileNames))
+	for i, name := range fileNames {
+		label := name[prefixLen : len(name)-suffixLen]
+		labels[i] = strings.Trim(label, "-_ ")
+	}
+
 	return labels
-}
-
-func getCommonPrefix(strs []string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	prefix := strs[0]
-	for _, s := range strs[1:] {
-		for !strings.HasPrefix(s, prefix) {
-			if len(prefix) == 0 {
-				return ""
-			}
-			prefix = prefix[:len(prefix)-1]
-		}
-	}
-	return prefix
-}
-
-func getCommonSuffix(strs []string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	suffix := strs[0]
-	for _, s := range strs[1:] {
-		for !strings.HasSuffix(s, suffix) {
-			if len(suffix) == 0 {
-				return ""
-			}
-			suffix = suffix[1:]
-		}
-	}
-	return suffix
 }
