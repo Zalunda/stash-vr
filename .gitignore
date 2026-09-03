@@ -2,3 +2,5 @@
 /.idea/
 /graphql.config.yml
 /build/
+/cmd/stash-vr/output/**
+/cmd/stash-vr/review_options/**

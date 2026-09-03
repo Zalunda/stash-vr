@@ -1,19 +1,21 @@
 package api
 
 import (
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"stash-vr/internal/api/deovr"
 	"stash-vr/internal/api/heatmap"
 	"stash-vr/internal/api/heresphere"
+	"stash-vr/internal/api/review"
 	"stash-vr/internal/api/web"
 	"stash-vr/internal/config"
 	"stash-vr/internal/library"
 	"stash-vr/internal/static"
 	"stash-vr/internal/util"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog/log"
 )
 
 func Router(libraryService *library.Service) *chi.Mux {
@@ -30,6 +32,11 @@ func Router(libraryService *library.Service) *chi.Mux {
 
 	router.Post("/filters", logMod("filters", web.FiltersUpdateHandler()).ServeHTTP)
 	router.Get("/cover/{videoId}", logMod("heatmap", heatmap.CoverHandler(libraryService)).ServeHTTP)
+
+	// NEW: Review Hub Endpoints
+	router.Get("/review", logMod("review", review.UIHandler()).ServeHTTP)
+	router.Get("/api/review/context", logMod("review", review.ContextHandler(libraryService)).ServeHTTP)
+	router.Post("/api/review/submit", logMod("review", review.SubmitHandler(libraryService)).ServeHTTP)
 
 	router.Get("/", web.IndexHandler(libraryService).ServeHTTP)
 

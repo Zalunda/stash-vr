@@ -2,8 +2,11 @@ package heresphere
 
 import (
 	"context"
+	"slices"
 	"stash-vr/internal/library"
+	"stash-vr/internal/stash/gql"
 	"stash-vr/internal/util"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -31,15 +34,14 @@ func buildScan(ctx context.Context, vds map[string]*library.VideoData, baseUrl s
 	scanDoc := scanDocDto{ScanData: make([]scanDataDto, 0)}
 
 	for _, vd := range vds {
-		// 1. Extract the labels (e.g. "A", "B", "Cam1")
-		fileNames := make([]string, len(vd.SceneParts.Files))
-		for i, f := range vd.SceneParts.Files {
-			fileNames[i] = f.Basename
-		}
-		labels := util.ExtractLabels(fileNames)
+		// 1. Get alphabetically sorted files
+		files := getSortedFiles(vd)
 
-		// 2. Create a virtual scan entry for every file in the scene
-		for i, f := range vd.SceneParts.Files {
+		// 2. Get the validated labels using our helper
+		labels := vd.GetValidatedLabels()
+
+		// 3. Create a virtual scan entry for every file in the scene
+		for i, f := range files {
 			scanData := videoDataToScanDataDto(ctx, vd, baseUrl, f.Id, f.Duration, labels[i])
 			scanDoc.ScanData = append(scanDoc.ScanData, scanData)
 		}
@@ -55,7 +57,7 @@ func videoDataToScanDataDto(ctx context.Context, vd *library.VideoData, baseUrl 
 
 	// Append the label to the title if it's a multipart scene
 	title := vd.Title()
-	if len(vd.SceneParts.Files) > 1 {
+	if len(vd.SceneParts.Files) > 1 && label != "" {
 		title = title + " [" + label + "]"
 	}
 
@@ -83,4 +85,15 @@ func videoDataToScanDataDto(ctx context.Context, vd *library.VideoData, baseUrl 
 		scanData.IsFavorite = util.Ptr(true)
 	}
 	return scanData
+}
+
+// --- HELPER FUNCTIONS ---
+
+func getSortedFiles(vd *library.VideoData) []*gql.ScenePartsFilesVideoFile {
+	files := make([]*gql.ScenePartsFilesVideoFile, len(vd.SceneParts.Files))
+	copy(files, vd.SceneParts.Files)
+	slices.SortFunc(files, func(a, b *gql.ScenePartsFilesVideoFile) int {
+		return strings.Compare(a.Basename, b.Basename)
+	})
+	return files
 }

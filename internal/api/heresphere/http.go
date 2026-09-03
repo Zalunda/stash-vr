@@ -94,30 +94,38 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 	// 1. Extract Real Scene ID and Target File ID
 	realId, targetFileId := library.ParseVirtualId(virtualVideoId)
 
-	// 2. Fetch the scene as it is right now
+	// 2. Parse the request body early to check HereSphere's intent
+	var vdReq videoDataRequestDto
+	var hasReqBody bool
+	if reqBody, err := internal.UnmarshalBody[videoDataRequestDto](req); err == nil {
+		vdReq = reqBody
+		hasReqBody = true
+	}
+
+	// HereSphere sets NeedsMediaSource to true ONLY when the user clicks play.
+	// If it's just fetching thumbnails for the grid, this will be false/nil.
+	isPlayRequest := hasReqBody && vdReq.NeedsMediaSource != nil && *vdReq.NeedsMediaSource
+
+	// 3. Fetch the scene as it is right now
 	vd, err := h.libraryService.GetScene(ctx, realId, false)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	// 3. Find the label for the requested file (BEFORE we switch primary, to keep index aligned)
-	fileNames := make([]string, len(vd.SceneParts.Files))
-	for i, f := range vd.SceneParts.Files {
-		fileNames[i] = f.Basename
-	}
-	labels := util.ExtractLabels(fileNames)
-
+	// 4. Find the label for the requested file
+	files := getSortedFiles(vd)
+	labels := vd.GetValidatedLabels()
 	label := ""
-	for i, f := range vd.SceneParts.Files {
+	for i, f := range files {
 		if f.Id == targetFileId && i < len(labels) {
 			label = labels[i]
 			break
 		}
 	}
 
-	// 4. Change the primary file in the DB if needed
-	if targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
+	// 5. Change the primary file in the DB ONLY if the user actually clicked play!
+	if isPlayRequest && targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
 		log.Ctx(ctx).Info().Str("scene", realId).Str("file", targetFileId).Msg("Switching Primary File for Multi-part Scene")
 
 		if err := h.libraryService.SetPrimaryFile(ctx, realId, targetFileId); err != nil {
@@ -132,16 +140,19 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 		}
 	}
 
-	// 5. Handle ratings/favorites updates
-	if vdReq, err := internal.UnmarshalBody[videoDataRequestDto](req); err == nil {
+	// 6. Handle ratings/favorites updates
+	if hasReqBody {
 		if vdReq.DeleteFile != nil && *vdReq.DeleteFile {
 			h.libraryService.Delete(ctx, realId)
 			return
 		}
-		go h.processUpdates(realId, vdReq)
+		// Only run update routines if there is actual data to update
+		if vdReq.Rating != nil || vdReq.IsFavorite != nil || vdReq.Tags != nil {
+			go h.processUpdates(realId, vdReq)
+		}
 	}
 
-	// 6. Build the video data and pass the label AND targetFileId!
+	// 7. Build the video data and pass the label AND targetFileId
 	dto, err := buildVideoData(ctx, vd, baseUrl, label, targetFileId)
 	if err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("failed to build video data")
@@ -296,7 +307,9 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 
 	parts := strings.Split(ev.Id, "/")
 	videoId := parts[len(parts)-1]
-	vd, err := h.libraryService.GetScene(ctx, videoId, false)
+	realId, _ := library.ParseVirtualId(videoId)
+
+	vd, err := h.libraryService.GetScene(ctx, realId, false)
 	if err != nil {
 		log.Ctx(ctx).Warn().Err(err).Msg("Failed to get scene from event")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -305,19 +318,26 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 
 	log.Ctx(ctx).Debug().Str("id", ev.Id).Str("event", ev.Event.String()).Send()
 
+	if ev.Event == evPlay || ev.Event == evClose || ev.Event == evPause {
+		h.libraryService.LastWatchedSceneId = realId
+		h.libraryService.LastWatchedSceneTitle = vd.Title()
+	}
+
+	eventTimeSec := float64(ev.Time) / 1000.0
+
 	switch ev.Event {
 	case evPlay:
 		if h.ps == nil {
-			h.ps = newPlayback(vd)
+			h.ps = newPlayback(vd, eventTimeSec)
 		} else if h.ps.videoId != videoId {
-			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
-			h.ps = newPlayback(vd)
+			h.ps.handleStop(ctx, h.libraryService, minPlayFraction, eventTimeSec)
+			h.ps = newPlayback(vd, eventTimeSec)
 		} else {
-			h.ps.handleResume()
+			h.ps.handleResume(eventTimeSec)
 		}
 	case evPause, evClose:
 		if h.ps != nil {
-			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
+			h.ps.handleStop(ctx, h.libraryService, minPlayFraction, eventTimeSec)
 		}
 	default:
 	}
