@@ -9,6 +9,7 @@ import (
 	"stash-vr/internal/library"
 	"stash-vr/internal/stash"
 	"stash-vr/internal/util"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -64,7 +65,7 @@ type subtitleDto struct {
 	Url      string `json:"url,omitempty"`
 }
 
-func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, label string) (*videoDataDto, error) {
+func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, label string, fileId string) (*videoDataDto, error) {
 	videoId := vd.Id()
 	if len(vd.SceneParts.Files) == 0 {
 		return nil, fmt.Errorf("scene %s has no files", videoId)
@@ -119,7 +120,7 @@ func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, 
 		dto.IsFavorite = util.Ptr(true)
 	}
 
-	setMediaSources(vd, &dto)
+	setMediaSources(vd, &dto, fileId)
 
 	set3DFormat(vd, &dto)
 
@@ -212,16 +213,27 @@ func set3DFormat(vd *library.VideoData, dto *videoDataDto) {
 	}
 }
 
-func setMediaSources(vd *library.VideoData, dto *videoDataDto) {
+func setMediaSources(vd *library.VideoData, dto *videoDataDto, fileId string) {
 	streams := []stash.Stream{stash.GetDirectStream(vd.SceneParts), stash.GetTranscodingStream(vd.SceneParts)}
 	for _, stream := range streams {
 		e := mediaDto{
 			Name: stream.Name,
 		}
 		for _, s := range stream.Sources {
+			uniqueUrl := s.Url
+
+			// Inject dummy parameter to isolate HereSphere's local cache per part
+			if fileId != "" {
+				if strings.Contains(uniqueUrl, "?") {
+					uniqueUrl += "&_hs_fileId=" + fileId
+				} else {
+					uniqueUrl += "?_hs_fileId=" + fileId
+				}
+			}
+
 			vs := sourceDto{
 				Resolution: s.Resolution,
-				Url:        s.Url,
+				Url:        uniqueUrl,
 			}
 			e.Sources = append(e.Sources, vs)
 		}
