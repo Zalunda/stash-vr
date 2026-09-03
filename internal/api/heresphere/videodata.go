@@ -64,15 +64,21 @@ type subtitleDto struct {
 	Url      string `json:"url,omitempty"`
 }
 
-func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string) (*videoDataDto, error) {
+func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, label string) (*videoDataDto, error) {
 	videoId := vd.Id()
 	if len(vd.SceneParts.Files) == 0 {
 		return nil, fmt.Errorf("scene %s has no files", videoId)
 	}
 
+	// 1. Append the label to the title
+	title := vd.Title()
+	if label != "" && len(vd.SceneParts.Files) > 1 {
+		title = title + " [" + label + "]"
+	}
+
 	dto := videoDataDto{
 		Access:        1,
-		Title:         vd.Title(),
+		Title:         title,
 		DateAdded:     vd.SceneParts.Created_at.Format(time.DateOnly),
 		Duration:      vd.SceneParts.Files[0].Duration * 1000,
 		WriteFavorite: util.Ptr(true),

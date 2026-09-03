@@ -28,23 +28,43 @@ type scanDataDto struct {
 }
 
 func buildScan(ctx context.Context, vds map[string]*library.VideoData, baseUrl string) (*scanDocDto, error) {
-	scanDoc := scanDocDto{ScanData: make([]scanDataDto, 0, len(vds))}
+	scanDoc := scanDocDto{ScanData: make([]scanDataDto, 0)}
+
 	for _, vd := range vds {
-		scanData := videoDataToScanDataDto(ctx, vd, baseUrl)
-		scanDoc.ScanData = append(scanDoc.ScanData, scanData)
+		// 1. Extract the labels (e.g. "A", "B", "Cam1")
+		fileNames := make([]string, len(vd.SceneParts.Files))
+		for i, f := range vd.SceneParts.Files {
+			fileNames[i] = f.Basename
+		}
+		labels := util.ExtractLabels(fileNames)
+
+		// 2. Create a virtual scan entry for every file in the scene
+		for i, f := range vd.SceneParts.Files {
+			scanData := videoDataToScanDataDto(ctx, vd, baseUrl, f.Id, f.Duration, labels[i])
+			scanDoc.ScanData = append(scanDoc.ScanData, scanData)
+		}
 	}
+
 	log.Ctx(ctx).Debug().Int("scenes", len(scanDoc.ScanData)).Msg("/scan")
 	return &scanDoc, nil
 }
 
-func videoDataToScanDataDto(ctx context.Context, vd *library.VideoData, baseUrl string) scanDataDto {
-	id := vd.Id()
+func videoDataToScanDataDto(ctx context.Context, vd *library.VideoData, baseUrl string, fileId string, duration float64, label string) scanDataDto {
+	// Generate the virtual ID: "123_456"
+	id := library.MakeVirtualId(vd.Id(), fileId)
+
+	// Append the label to the title if it's a multipart scene
+	title := vd.Title()
+	if len(vd.SceneParts.Files) > 1 {
+		title = title + " [" + label + "]"
+	}
+
 	scanData := scanDataDto{
 		id:        id,
 		Link:      getVideoDataUrl(baseUrl, id),
-		Title:     vd.Title(),
+		Title:     title,
 		DateAdded: vd.SceneParts.Created_at.Format(time.DateOnly),
-		Duration:  vd.SceneParts.Files[0].Duration,
+		Duration:  duration, // Specific file duration
 		Tags:      getTags(vd),
 	}
 	if vd.SceneParts.Date != nil {

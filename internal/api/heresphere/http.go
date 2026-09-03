@@ -3,8 +3,6 @@ package heresphere
 import (
 	"context"
 	"fmt"
-	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"net/url"
 	"stash-vr/internal/api/internal"
@@ -12,6 +10,9 @@ import (
 	"stash-vr/internal/stash"
 	"stash-vr/internal/util"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 )
 
 type httpHandler struct {
@@ -35,15 +36,14 @@ func (h *httpHandler) indexHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	go func() {
-		ctx := context.Background()
-		_, err := h.libraryService.GetScenes(ctx)
-		if err != nil {
-			log.Ctx(ctx).Error().Err(err).Msg("failed to get scenes")
-		}
-	}()
+	vds, err := h.libraryService.GetScenes(ctx)
+	if err != nil {
+		log.Ctx(ctx).Error().Err(err).Msg("failed to get scenes")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
-	dto, err := buildIndex(sections, baseUrl)
+	dto, err := buildIndex(sections, vds, baseUrl)
 	if err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("failed to build index")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -83,39 +83,73 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 
 	ctx := req.Context()
 	baseUrl := internal.GetBaseUrl(req)
-	videoId, err := url.QueryUnescape(chi.URLParam(req, "videoId"))
+
+	virtualVideoId, err := url.QueryUnescape(chi.URLParam(req, "videoId"))
 	if err != nil {
 		log.Ctx(ctx).Warn().Err(err).Msg("malformed videoId")
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	if vdReq, err := internal.UnmarshalBody[videoDataRequestDto](req); err != nil {
-		log.Ctx(ctx).Warn().Err(err).Msg("Failed to parse request body")
-	} else {
-		if vdReq.DeleteFile != nil && *vdReq.DeleteFile {
-			if err = h.libraryService.Delete(ctx, videoId); err != nil {
-				log.Ctx(ctx).Warn().Err(err).Msg("Failed to delete scene")
-				w.WriteHeader(http.StatusInternalServerError)
-			}
-			return
-		}
+	// 1. Extract Real Scene ID and Target File ID
+	realId, targetFileId := library.ParseVirtualId(virtualVideoId)
 
-		go h.processUpdates(videoId, vdReq)
-	}
-
-	vd, err := h.libraryService.GetScene(ctx, videoId, false)
+	// 2. Fetch the scene as it is right now
+	vd, err := h.libraryService.GetScene(ctx, realId, false)
 	if err != nil {
-		log.Ctx(ctx).Error().Err(err).Msg("failed to get scene")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	dto, err := buildVideoData(ctx, vd, baseUrl)
+
+	// 3. Find the label for the requested file (BEFORE we switch primary, to keep index aligned)
+	fileNames := make([]string, len(vd.SceneParts.Files))
+	for i, f := range vd.SceneParts.Files {
+		fileNames[i] = f.Basename
+	}
+	labels := util.ExtractLabels(fileNames)
+
+	label := ""
+	for i, f := range vd.SceneParts.Files {
+		if f.Id == targetFileId && i < len(labels) {
+			label = labels[i]
+			break
+		}
+	}
+
+	// 4. Change the primary file in the DB if needed
+	if targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
+		log.Ctx(ctx).Info().Str("scene", realId).Str("file", targetFileId).Msg("Switching Primary File for Multi-part Scene")
+
+		if err := h.libraryService.SetPrimaryFile(ctx, realId, targetFileId); err != nil {
+			log.Ctx(ctx).Warn().Err(err).Msg("Failed to switch primary file")
+		} else {
+			// Refetch scene so Paths point to the new primary file
+			vd, err = h.libraryService.GetScene(ctx, realId, true)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	// 5. Handle ratings/favorites updates
+	if vdReq, err := internal.UnmarshalBody[videoDataRequestDto](req); err == nil {
+		if vdReq.DeleteFile != nil && *vdReq.DeleteFile {
+			h.libraryService.Delete(ctx, realId)
+			return
+		}
+		go h.processUpdates(realId, vdReq)
+	}
+
+	// 6. Build the video data and pass the label!
+	dto, err := buildVideoData(ctx, vd, baseUrl, label)
 	if err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("failed to build video data")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	dto.EventServer = util.Ptr(getEventsUrl(baseUrl, virtualVideoId))
 
 	if err := internal.WriteJson(ctx, w, dto); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("write")
