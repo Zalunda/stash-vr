@@ -141,8 +141,8 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 		go h.processUpdates(realId, vdReq)
 	}
 
-	// 6. Build the video data and pass the label!
-	dto, err := buildVideoData(ctx, vd, baseUrl, label)
+	// 6. Build the video data and pass the label AND targetFileId!
+	dto, err := buildVideoData(ctx, vd, baseUrl, label, targetFileId)
 	if err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("failed to build video data")
 		w.WriteHeader(http.StatusInternalServerError)
