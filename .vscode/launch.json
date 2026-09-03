@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch stash-vr",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/stash-vr/main.go",
+            "env": {
+                // If stash-vr needs environment variables to connect to your stash instance, put them here
+                "STASH_GRAPHQL_URL": "http://192.168.2.101:9999/graphql"
+            },
+            "args": []
+        }
+    ]
+}

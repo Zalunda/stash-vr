@@ -3,13 +3,14 @@ package library
 import (
 	"context"
 	"fmt"
-	"github.com/rs/zerolog/log"
 	"slices"
 	"stash-vr/internal/config"
 	"stash-vr/internal/stash"
 	"stash-vr/internal/stash/gql"
 	"stash-vr/internal/util"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 func (libraryService *Service) UpdateRating(ctx context.Context, id string, rating5 *float32) error {
@@ -240,6 +241,14 @@ func (libraryService *Service) AddPlayDuration(ctx context.Context, id string, d
 	_, err := gql.SceneAddPlayDurationSeconds(ctx, libraryService.StashClient, id, &seconds)
 	if err != nil {
 		return fmt.Errorf("SceneAddPlayDurationSeconds: %w", err)
+	}
+	return nil
+}
+
+func (libraryService *Service) SetPrimaryFile(ctx context.Context, sceneId string, fileId string) error {
+	_, err := gql.SceneUpdatePrimaryFile(ctx, libraryService.StashClient, sceneId, fileId)
+	if err != nil {
+		return fmt.Errorf("SceneUpdatePrimaryFile: %w", err)
 	}
 	return nil
 }
