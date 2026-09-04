@@ -31,16 +31,11 @@ func buildScan(ctx context.Context, vds map[string]*library.VideoData, baseUrl s
 	scanDoc := scanDocDto{ScanData: make([]scanDataDto, 0)}
 
 	for _, vd := range vds {
-		// 1. Extract the labels (e.g. "A", "B", "Cam1")
-		fileNames := make([]string, len(vd.SceneParts.Files))
-		for i, f := range vd.SceneParts.Files {
-			fileNames[i] = f.Basename
-		}
-		labels := util.ExtractLabels(fileNames)
+		sortedFiles, labels := vd.GetFilesSortedByLabel()
 
-		// 2. Create a virtual scan entry for every file in the scene
-		for i, f := range vd.SceneParts.Files {
-			scanData := videoDataToScanDataDto(ctx, vd, baseUrl, f.Id, f.Duration, labels[i])
+		// Create a virtual scan entry for every file in the scene
+		for _, f := range sortedFiles {
+			scanData := videoDataToScanDataDto(ctx, vd, baseUrl, f.Id, f.Duration, labels[f.Id])
 			scanDoc.ScanData = append(scanDoc.ScanData, scanData)
 		}
 	}

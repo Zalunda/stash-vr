@@ -94,6 +94,18 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 	// 1. Extract Real Scene ID and Target File ID
 	realId, targetFileId := library.ParseVirtualId(virtualVideoId)
 
+	// 2. Parse the request body early to check HereSphere's intent
+	var vdReq videoDataRequestDto
+	var hasReqBody bool
+	if reqBody, err := internal.UnmarshalBody[videoDataRequestDto](req); err == nil {
+		vdReq = reqBody
+		hasReqBody = true
+	}
+
+	// HereSphere sets NeedsMediaSource to true ONLY when the user clicks play.
+	// If it's just fetching thumbnails for the grid, this will be false/nil.
+	isPlayRequest := hasReqBody && vdReq.NeedsMediaSource != nil && *vdReq.NeedsMediaSource
+
 	// 2. Fetch the scene as it is right now
 	vd, err := h.libraryService.GetScene(ctx, realId, false)
 	if err != nil {
@@ -101,23 +113,11 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	// 3. Find the label for the requested file (BEFORE we switch primary, to keep index aligned)
-	fileNames := make([]string, len(vd.SceneParts.Files))
-	for i, f := range vd.SceneParts.Files {
-		fileNames[i] = f.Basename
-	}
-	labels := util.ExtractLabels(fileNames)
+	// 3. Find the label for the requested file
+	label := vd.GetFileLabels()[targetFileId]
 
-	label := ""
-	for i, f := range vd.SceneParts.Files {
-		if f.Id == targetFileId && i < len(labels) {
-			label = labels[i]
-			break
-		}
-	}
-
-	// 4. Change the primary file in the DB if needed
-	if targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
+	// 5. Change the primary file in the DB ONLY if the user actually clicked play!
+	if isPlayRequest && targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
 		log.Ctx(ctx).Info().Str("scene", realId).Str("file", targetFileId).Msg("Switching Primary File for Multi-part Scene")
 
 		if err := h.libraryService.SetPrimaryFile(ctx, realId, targetFileId); err != nil {
@@ -295,8 +295,12 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	parts := strings.Split(ev.Id, "/")
-	videoId := parts[len(parts)-1]
-	vd, err := h.libraryService.GetScene(ctx, videoId, false)
+	virtualVideoId := parts[len(parts)-1]
+
+	// Decouple virtual ID into real Scene ID and File ID
+	realId, fileId := library.ParseVirtualId(virtualVideoId)
+
+	vd, err := h.libraryService.GetScene(ctx, realId, false)
 	if err != nil {
 		log.Ctx(ctx).Warn().Err(err).Msg("Failed to get scene from event")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -308,10 +312,11 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 	switch ev.Event {
 	case evPlay:
 		if h.ps == nil {
-			h.ps = newPlayback(vd)
-		} else if h.ps.videoId != videoId {
+			h.ps = newPlayback(vd, fileId)
+		} else if h.ps.sceneId != realId || h.ps.fileId != fileId {
+			// Trigger stop if they switch to a different scene OR a different part of the same scene
 			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
-			h.ps = newPlayback(vd)
+			h.ps = newPlayback(vd, fileId)
 		} else {
 			h.ps.handleResume()
 		}
