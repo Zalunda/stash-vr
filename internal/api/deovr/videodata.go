@@ -2,6 +2,8 @@ package deovr
 
 import (
 	"fmt"
+	"hash/fnv"
+	"net/url"
 	"stash-vr/internal/api/heatmap"
 	"stash-vr/internal/api/internal"
 	"stash-vr/internal/library"
@@ -44,24 +46,46 @@ type videoSourceDto struct {
 	Url        string `json:"url"`
 }
 
-func buildVideoData(vd *library.VideoData, baseUrl string) (*videoDataDto, error) {
-	videoId := vd.Id()
+func hashVirtualIdVideoData(vid string) string {
+	h := fnv.New32a()
+	h.Write([]byte(vid))
+	return fmt.Sprintf("%d", h.Sum32()&0x7FFFFFFF)
+}
+
+func buildVideoData(vd *library.VideoData, baseUrl string, label string, fileId string) (*videoDataDto, error) {
+	vid := library.MakeVirtualId(vd.Id(), fileId)
+
 	if len(vd.SceneParts.Files) == 0 {
-		return nil, fmt.Errorf("scene %s has no files", videoId)
+		return nil, fmt.Errorf("scene %s has no files", vd.Id())
+	}
+
+	title := vd.Title()
+	if label != "" && len(vd.SceneParts.Files) > 1 {
+		title = title + " [" + label + "]"
+	}
+
+	duration := vd.SceneParts.Files[0].Duration
+	if fileId != "" {
+		for _, f := range vd.SceneParts.Files {
+			if f.Id == fileId {
+				duration = f.Duration
+				break
+			}
+		}
 	}
 
 	dto := videoDataDto{
 		Authorized:  "1",
 		FullAccess:  true,
-		Title:       vd.Title(),
-		Id:          videoId,
-		VideoLength: int(vd.SceneParts.Files[0].Duration),
+		Title:       title,
+		Id:          hashVirtualIdVideoData(vid),
+		VideoLength: int(duration),
 		SkipIntro:   0,
 	}
 
 	if vd.SceneParts.Paths.Screenshot != nil {
 		if vd.SceneParts.Interactive && vd.SceneParts.Paths.Interactive_heatmap != nil {
-			dto.ThumbnailUrl = util.Ptr(heatmap.GetCoverUrl(baseUrl, videoId))
+			dto.ThumbnailUrl = util.Ptr(heatmap.GetCoverUrl(baseUrl, vd.Id()))
 		} else {
 			dto.ThumbnailUrl = util.Ptr(stash.ApiKeyed(*vd.SceneParts.Paths.Screenshot))
 		}
@@ -71,14 +95,15 @@ func buildVideoData(vd *library.VideoData, baseUrl string) (*videoDataDto, error
 		dto.VideoPreview = util.Ptr(stash.ApiKeyed(*vd.SceneParts.Paths.Preview))
 	}
 
-	setStreamSources(vd, &dto)
+	// Pass baseUrl down
+	setStreamSources(vd, &dto, fileId, baseUrl)
 	setMarkers(vd, &dto)
 	set3DFormat(vd, &dto)
 
 	return &dto, nil
 }
 
-func setStreamSources(vd *library.VideoData, dto *videoDataDto) {
+func setStreamSources(vd *library.VideoData, dto *videoDataDto, fileId string, baseUrl string) {
 	streams := []stash.Stream{stash.GetTranscodingStream(vd.SceneParts), stash.GetDirectStream(vd.SceneParts)}
 	dto.Encodings = make([]encodingDto, len(streams))
 	for i, stream := range streams {
@@ -87,9 +112,16 @@ func setStreamSources(vd *library.VideoData, dto *videoDataDto) {
 			VideoSources: make([]videoSourceDto, len(stream.Sources)),
 		}
 		for j, source := range stream.Sources {
+
+			// Point DeoVR to our interceptor endpoint, hiding the real URL in a query parameter
+			redirectUrl := fmt.Sprintf("%s/deovr/play/%s?url=%s", baseUrl, vd.Id(), url.QueryEscape(source.Url))
+			if fileId != "" {
+				redirectUrl += "&part=" + fileId
+			}
+
 			dto.Encodings[i].VideoSources[j] = videoSourceDto{
 				Resolution: source.Resolution,
-				Url:        source.Url,
+				Url:        redirectUrl,
 			}
 		}
 	}

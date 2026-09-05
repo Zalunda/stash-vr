@@ -1,6 +1,8 @@
 package deovr
 
 import (
+	"fmt"
+	"hash/fnv"
 	"stash-vr/internal/library"
 	"stash-vr/internal/stash"
 	"stash-vr/internal/util"
@@ -24,27 +26,53 @@ type previewDataDto struct {
 	VideoUrl     string  `json:"video_url"`
 }
 
-func buildIndex(sections []library.Section, vds map[string]*library.VideoData, baseUrl string) (indexDto, error) {
-	index := indexDto{Authorized: "1", Scenes: make([]sceneDto, len(sections))}
+// DeoVR requires a numeric ID that fits within a 32-bit signed int (Max: 2147483647)
+func hashVirtualId(vid string) string {
+	h := fnv.New32a()
+	h.Write([]byte(vid))
+	// Masking with 0x7FFFFFFF strips the sign bit, preventing overflow crashes in Unity
+	return fmt.Sprintf("%d", h.Sum32()&0x7FFFFFFF)
+}
 
-	for i, section := range sections {
+func buildIndex(sections []library.Section, vds map[string]*library.VideoData, baseUrl string) (indexDto, error) {
+	index := indexDto{Authorized: "1", Scenes: make([]sceneDto, 0, len(sections))}
+
+	for _, section := range sections {
 		s := sceneDto{
 			Name: section.Name,
-			List: make([]previewDataDto, len(section.Ids)),
+			List: make([]previewDataDto, 0),
 		}
-		index.Scenes[i] = s
 
-		for j, sectionSceneId := range section.Ids {
-			vd := vds[sectionSceneId]
-			s.List[j] = previewDataDto{
-				Id:          vd.SceneParts.Id,
-				Title:       vd.Title(),
-				VideoLength: int(vd.SceneParts.Files[0].Duration),
-				VideoUrl:    getVideoDataUrl(baseUrl, vd.Id()),
+		for _, sceneId := range section.Ids {
+			if vd, ok := vds[sceneId]; ok {
+				sortedFiles, labels := vd.GetFilesSortedByLabel()
+
+				for _, f := range sortedFiles {
+					vid := library.MakeVirtualId(sceneId, f.Id)
+
+					title := vd.Title()
+					if len(sortedFiles) > 1 {
+						title = title + "-" + labels[f.Id]
+					}
+
+					previewData := previewDataDto{
+						Id:          hashVirtualId(vid),
+						Title:       title,
+						VideoLength: int(f.Duration),
+						VideoUrl:    getVideoDataUrl(baseUrl, vid),
+					}
+
+					if vd.SceneParts.Paths.Screenshot != nil {
+						previewData.ThumbnailUrl = util.Ptr(stash.ApiKeyed(*vd.SceneParts.Paths.Screenshot))
+					}
+
+					s.List = append(s.List, previewData)
+				}
 			}
-			if vd.SceneParts.Paths.Screenshot != nil {
-				s.List[j].ThumbnailUrl = util.Ptr(stash.ApiKeyed(*vd.SceneParts.Paths.Screenshot))
-			}
+		}
+
+		if len(s.List) > 0 {
+			index.Scenes = append(index.Scenes, s)
 		}
 	}
 
