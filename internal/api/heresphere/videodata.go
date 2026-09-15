@@ -236,9 +236,9 @@ func setMediaSources(vd *library.VideoData, dto *videoDataDto, fileId string) {
 			// Inject dummy parameter to isolate HereSphere's local cache per part
 			if fileId != "" {
 				if strings.Contains(uniqueUrl, "?") {
-					uniqueUrl += "&_hs_fileId=" + fileId
+					uniqueUrl += "&fileId=" + fileId
 				} else {
-					uniqueUrl += "?_hs_fileId=" + fileId
+					uniqueUrl += "?fileId=" + fileId
 				}
 			}
 

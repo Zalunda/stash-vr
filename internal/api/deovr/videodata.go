@@ -115,7 +115,7 @@ func setStreamSources(vd *library.VideoData, dto *videoDataDto, fileId string, b
 		for j, source := range stream.Sources {
 			redirectUrl := fmt.Sprintf("%s/deovr/play/%s?url=%s", baseUrl, vd.Id(), url.QueryEscape(source.Url))
 			if fileId != "" {
-				redirectUrl += "&part=" + fileId
+				redirectUrl += "&fileId=" + fileId
 			}
 
 			dto.Encodings[i].VideoSources[j] = videoSourceDto{
