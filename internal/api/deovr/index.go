@@ -26,11 +26,13 @@ type previewDataDto struct {
 	VideoUrl     string  `json:"video_url"`
 }
 
-// DeoVR requires a numeric ID that fits within a 32-bit signed int (Max: 2147483647)
-func hashVirtualId(vid string) string {
+func safeHashVirtualId(sceneId string, fileId string) string {
 	h := fnv.New32a()
-	h.Write([]byte(vid))
-	// Masking with 0x7FFFFFFF strips the sign bit, preventing overflow crashes in Unity
+	if fileId == "" {
+		h.Write([]byte(sceneId))
+	} else {
+		h.Write([]byte(sceneId + "_" + fileId))
+	}
 	return fmt.Sprintf("%d", h.Sum32()&0x7FFFFFFF)
 }
 
@@ -45,21 +47,24 @@ func buildIndex(sections []library.Section, vds map[string]*library.VideoData, b
 
 		for _, sceneId := range section.Ids {
 			if vd, ok := vds[sceneId]; ok {
-				sortedFiles, labels := vd.GetFilesSortedByLabel()
 
-				for _, f := range sortedFiles {
-					vid := library.MakeVirtualId(sceneId, f.Id)
-
+				// GetPlaybackItems handles the config toggle automatically
+				for _, item := range vd.GetPlaybackItems() {
 					title := vd.Title()
-					if len(sortedFiles) > 1 {
-						title = title + "-" + labels[f.Id]
+					if item.Label != "" {
+						title = title + " [" + item.Label + "]"
+					}
+
+					videoUrl := getVideoDataUrl(baseUrl, sceneId)
+					if item.FileId != "" {
+						videoUrl += "?part=" + item.FileId
 					}
 
 					previewData := previewDataDto{
-						Id:          hashVirtualId(vid),
+						Id:          safeHashVirtualId(sceneId, item.FileId),
 						Title:       title,
-						VideoLength: int(f.Duration),
-						VideoUrl:    getVideoDataUrl(baseUrl, vid),
+						VideoLength: int(item.File.Duration),
+						VideoUrl:    videoUrl,
 					}
 
 					if vd.SceneParts.Paths.Screenshot != nil {

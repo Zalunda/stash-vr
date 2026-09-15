@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"stash-vr/internal/config"
 	"stash-vr/internal/stash/gql"
 	"stash-vr/internal/util"
 	"strings"
@@ -29,7 +30,11 @@ func ParseVirtualId(virtualId string) (string, string) {
 	return virtualId, ""
 }
 
+// Ensure MakeVirtualId ignores empty fileIds
 func MakeVirtualId(sceneId string, fileId string) string {
+	if fileId == "" {
+		return sceneId
+	}
 	return sceneId + "_" + fileId
 }
 
@@ -158,4 +163,64 @@ func (vd VideoData) GetFilesSortedByLabel() ([]*gql.ScenePartsFilesVideoFile, ma
 	})
 
 	return sorted, labels
+}
+
+// PlaybackItem represents a single playable entry, masking whether it's multipart or not.
+type PlaybackItem struct {
+	FileId string
+	Label  string
+	File   *gql.ScenePartsFilesVideoFile
+}
+
+// GetPlaybackItems handles the "expand feature" toggle configuration natively.
+func (vd VideoData) GetPlaybackItems() []PlaybackItem {
+	files := vd.SceneParts.Files
+
+	// 1. Initial check: Is expansion enabled and do we have multiple files?
+	shouldExpand := config.Application().EnablePartsExpansion && len(files) > 1
+
+	// 2. Duration Heuristic: If all files have essentially the same duration,
+	// they are likely just different resolutions/encodings of the same video.
+	if shouldExpand {
+		minDur := files[0].Duration
+		maxDur := files[0].Duration
+		for _, f := range files[1:] {
+			if f.Duration < minDur {
+				minDur = f.Duration
+			}
+			if f.Duration > maxDur {
+				maxDur = f.Duration
+			}
+		}
+
+		// If the difference between the longest and shortest file is <= 1.0 seconds, do not expand.
+		if maxDur-minDur <= 1.0 {
+			shouldExpand = false
+		}
+	}
+
+	// 3. Return vanilla behavior if we shouldn't expand
+	if !shouldExpand {
+		// Safety check in case a scene genuinely has 0 files attached in Stash
+		if len(files) == 0 {
+			return []PlaybackItem{}
+		}
+		return []PlaybackItem{{
+			FileId: "", // Empty ID prevents virtual routing
+			Label:  "",
+			File:   files[0],
+		}}
+	}
+
+	// 4. Return expanded multi-part items
+	sorted, labels := vd.GetFilesSortedByLabel()
+	items := make([]PlaybackItem, len(sorted))
+	for i, f := range sorted {
+		items[i] = PlaybackItem{
+			FileId: f.Id,
+			Label:  labels[f.Id],
+			File:   f,
+		}
+	}
+	return items
 }

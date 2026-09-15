@@ -31,11 +31,8 @@ func buildScan(ctx context.Context, vds map[string]*library.VideoData, baseUrl s
 	scanDoc := scanDocDto{ScanData: make([]scanDataDto, 0)}
 
 	for _, vd := range vds {
-		sortedFiles, labels := vd.GetFilesSortedByLabel()
-
-		// Create a virtual scan entry for every file in the scene
-		for _, f := range sortedFiles {
-			scanData := videoDataToScanDataDto(ctx, vd, baseUrl, f.Id, f.Duration, labels[f.Id])
+		for _, item := range vd.GetPlaybackItems() {
+			scanData := videoDataToScanDataDto(ctx, vd, baseUrl, item.FileId, item.File.Duration, item.Label)
 			scanDoc.ScanData = append(scanDoc.ScanData, scanData)
 		}
 	}
@@ -45,12 +42,10 @@ func buildScan(ctx context.Context, vds map[string]*library.VideoData, baseUrl s
 }
 
 func videoDataToScanDataDto(ctx context.Context, vd *library.VideoData, baseUrl string, fileId string, duration float64, label string) scanDataDto {
-	// Generate the virtual ID: "123_456"
 	id := library.MakeVirtualId(vd.Id(), fileId)
 
-	// Append the label to the title if it's a multipart scene
 	title := vd.Title()
-	if len(vd.SceneParts.Files) > 1 {
+	if label != "" {
 		title = title + " [" + label + "]"
 	}
 
@@ -59,7 +54,7 @@ func videoDataToScanDataDto(ctx context.Context, vd *library.VideoData, baseUrl 
 		Link:      getVideoDataUrl(baseUrl, id),
 		Title:     title,
 		DateAdded: vd.SceneParts.Created_at.Format(time.DateOnly),
-		Duration:  duration, // Specific file duration
+		Duration:  duration,
 		Tags:      getTags(vd),
 	}
 	if vd.SceneParts.Date != nil {

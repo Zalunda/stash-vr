@@ -46,21 +46,23 @@ type videoSourceDto struct {
 	Url        string `json:"url"`
 }
 
-func hashVirtualIdVideoData(vid string) string {
+func safeHashVirtualIdVideoData(sceneId string, fileId string) string {
 	h := fnv.New32a()
-	h.Write([]byte(vid))
+	if fileId == "" {
+		h.Write([]byte(sceneId))
+	} else {
+		h.Write([]byte(sceneId + "_" + fileId))
+	}
 	return fmt.Sprintf("%d", h.Sum32()&0x7FFFFFFF)
 }
 
 func buildVideoData(vd *library.VideoData, baseUrl string, label string, fileId string) (*videoDataDto, error) {
-	vid := library.MakeVirtualId(vd.Id(), fileId)
-
 	if len(vd.SceneParts.Files) == 0 {
 		return nil, fmt.Errorf("scene %s has no files", vd.Id())
 	}
 
 	title := vd.Title()
-	if label != "" && len(vd.SceneParts.Files) > 1 {
+	if label != "" {
 		title = title + " [" + label + "]"
 	}
 
@@ -78,7 +80,7 @@ func buildVideoData(vd *library.VideoData, baseUrl string, label string, fileId 
 		Authorized:  "1",
 		FullAccess:  true,
 		Title:       title,
-		Id:          hashVirtualIdVideoData(vid),
+		Id:          safeHashVirtualIdVideoData(vd.Id(), fileId),
 		VideoLength: int(duration),
 		SkipIntro:   0,
 	}
@@ -95,7 +97,6 @@ func buildVideoData(vd *library.VideoData, baseUrl string, label string, fileId 
 		dto.VideoPreview = util.Ptr(stash.ApiKeyed(*vd.SceneParts.Paths.Preview))
 	}
 
-	// Pass baseUrl down
 	setStreamSources(vd, &dto, fileId, baseUrl)
 	setMarkers(vd, &dto)
 	set3DFormat(vd, &dto)
@@ -112,8 +113,6 @@ func setStreamSources(vd *library.VideoData, dto *videoDataDto, fileId string, b
 			VideoSources: make([]videoSourceDto, len(stream.Sources)),
 		}
 		for j, source := range stream.Sources {
-
-			// Point DeoVR to our interceptor endpoint, hiding the real URL in a query parameter
 			redirectUrl := fmt.Sprintf("%s/deovr/play/%s?url=%s", baseUrl, vd.Id(), url.QueryEscape(source.Url))
 			if fileId != "" {
 				redirectUrl += "&part=" + fileId

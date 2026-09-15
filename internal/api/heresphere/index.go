@@ -25,9 +25,8 @@ func buildIndex(sections []library.Section, vds map[string]*library.VideoData, b
 
 		for _, sceneId := range section.Ids {
 			if vd, ok := vds[sceneId]; ok {
-				sortedFiles, _ := vd.GetFilesSortedByLabel()
-				for _, f := range sortedFiles {
-					vid := library.MakeVirtualId(sceneId, f.Id)
+				for _, item := range vd.GetPlaybackItems() {
+					vid := library.MakeVirtualId(sceneId, item.FileId)
 					l.List = append(l.List, getVideoDataUrl(baseUrl, vid))
 				}
 			}
