@@ -8,6 +8,7 @@ import (
 	"stash-vr/internal/config"
 	"stash-vr/internal/library"
 	"stash-vr/internal/prefix"
+	"stash-vr/internal/stash/gql"
 	"stash-vr/internal/util"
 	"strconv"
 	"strings"
@@ -80,18 +81,19 @@ func addMultiTracks(target *[]tagDto, tags []tagDto, startTrack int) int {
 	return startTrack + tagCount
 }
 
-func getTags(vd *library.VideoData) []tagDto {
-	duration := vd.SceneParts.Files[0].Duration * 1000
+func getTags(vd *library.VideoData, file *gql.ScenePartsFilesVideoFile) []tagDto {
+	// Multiply by 1000 for HereSphere (milliseconds) using the SPECIFIC file's duration
+	durationMs := file.Duration * 1000
 
 	var tags []tagDto
 
 	trackIndex := addTrack(&tags, getMarkers(vd), 0)
 
 	if summary := getSummary(vd, false); summary != "" {
-		trackIndex = addSplitTrack(&tags, []tagDto{{Name: internal.LegendSummary + seperator + summary}}, trackIndex, duration)
+		trackIndex = addSplitTrack(&tags, []tagDto{{Name: internal.LegendSummary + seperator + summary}}, trackIndex, durationMs)
 	}
 
-	trackIndex = addSplitTrack(&tags, getFields(vd), trackIndex, duration)
+	trackIndex = addSplitTrack(&tags, getFields(vd, file), trackIndex, durationMs)
 	trackIndex = addMultiTracks(&tags, getStashTags(vd), trackIndex)
 	trackIndex = addMultiTracks(&tags, getStudio(vd), trackIndex)
 	trackIndex = addMultiTracks(&tags, getPerformers(vd), trackIndex)
@@ -217,7 +219,7 @@ func getStudio(vd *library.VideoData) []tagDto {
 	return []tagDto{{Name: fmt.Sprintf("%s%s%s", internal.LegendSceneStudio, seperator, vd.SceneParts.Studio.Name), value: vd.SceneParts.Studio.Name}}
 }
 
-func getFields(vd *library.VideoData) []tagDto {
+func getFields(vd *library.VideoData, file *gql.ScenePartsFilesVideoFile) []tagDto {
 	tags := make([]tagDto, 0)
 
 	playCount := 0
@@ -232,7 +234,7 @@ func getFields(vd *library.VideoData) []tagDto {
 	}
 	tags = append(tags, tagDto{Name: fmt.Sprintf("%s%s%d", internal.LegendMetaOCount, seperator, oCount)})
 
-	resolution, tier := nearestResolution(vd.SceneParts.Files[0].Height)
+	resolution, tier := nearestResolution(file.Height)
 	tags = append(tags, tagDto{Name: fmt.Sprintf("%s%s%dp", internal.LegendMetaResolution, seperator, resolution)})
 	tags = append(tags, tagDto{Name: fmt.Sprintf("%s%s%s", internal.LegendMetaResolution, seperator, tier)})
 

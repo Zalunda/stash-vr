@@ -8,6 +8,7 @@ import (
 	"stash-vr/internal/config"
 	"stash-vr/internal/library"
 	"stash-vr/internal/stash"
+	"stash-vr/internal/stash/gql"
 	"stash-vr/internal/util"
 	"strings"
 	"time"
@@ -77,15 +78,28 @@ func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, 
 		title = title + " [" + label + "]"
 	}
 
+	// Locate the specific file so we can read its exact duration and resolution
+	var targetFile *gql.ScenePartsFilesVideoFile = vd.SceneParts.Files[0]
+	if fileId != "" {
+		for _, f := range vd.SceneParts.Files {
+			if f.Id == fileId {
+				targetFile = f
+				break
+			}
+		}
+	}
+
+	durationMs := targetFile.Duration * 1000
+
 	dto := videoDataDto{
 		Access:        1,
 		Title:         title,
 		DateAdded:     vd.SceneParts.Created_at.Format(time.DateOnly),
-		Duration:      vd.SceneParts.Files[0].Duration * 1000,
+		Duration:      durationMs,
 		WriteFavorite: util.Ptr(true),
 		WriteRating:   util.Ptr(true),
 		WriteTags:     util.Ptr(true),
-		EventServer:   util.Ptr(getEventsUrl(baseUrl, videoId)),
+		EventServer:   util.Ptr(getEventsUrl(baseUrl, library.MakeVirtualId(videoId, fileId))),
 	}
 
 	if vd.SceneParts.Paths.Screenshot != nil {
@@ -121,19 +135,16 @@ func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, 
 	}
 
 	setMediaSources(vd, &dto, fileId)
-
 	set3DFormat(vd, &dto)
-
 	setScripts(vd, &dto)
-
 	setSubtitles(vd, &dto)
 
-	dto.Tags = getTags(vd)
+	dto.Tags = getTags(vd, targetFile)
 
 	log.Ctx(ctx).Debug().
 		Str("thumbImage", *dto.ThumbnailImage).
 		Str("thumbVideo", *dto.ThumbnailVideo).
-		Str("codec", vd.SceneParts.Files[0].Video_codec).
+		Str("codec", targetFile.Video_codec).
 		Interface("media", dto.Media).Send()
 
 	return &dto, nil
