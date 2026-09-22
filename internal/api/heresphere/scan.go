@@ -28,25 +28,39 @@ type scanDataDto struct {
 }
 
 func buildScan(ctx context.Context, vds map[string]*library.VideoData, baseUrl string) (*scanDocDto, error) {
-	scanDoc := scanDocDto{ScanData: make([]scanDataDto, 0, len(vds))}
+	scanDoc := scanDocDto{ScanData: make([]scanDataDto, 0)}
+
 	for _, vd := range vds {
-		scanData := videoDataToScanDataDto(ctx, vd, baseUrl)
-		scanDoc.ScanData = append(scanDoc.ScanData, scanData)
+		for _, item := range vd.GetPlaybackItems() {
+			scanData := videoDataToScanDataDto(ctx, vd, baseUrl, item)
+			scanDoc.ScanData = append(scanDoc.ScanData, scanData)
+		}
 	}
+
 	log.Ctx(ctx).Debug().Int("scenes", len(scanDoc.ScanData)).Msg("/scan")
 	return &scanDoc, nil
 }
 
-func videoDataToScanDataDto(ctx context.Context, vd *library.VideoData, baseUrl string) scanDataDto {
-	id := vd.Id()
+func videoDataToScanDataDto(ctx context.Context, vd *library.VideoData, baseUrl string, item library.PlaybackItem) scanDataDto {
+	id := library.MakeVirtualId(vd.Id(), item.FileId)
+
+	title := vd.Title()
+	if item.Label != "" {
+		title = title + " [" + item.Label + "]"
+	}
+
+	// HereSphere expects Duration to be in Milliseconds
+	durationMs := item.File.Duration * 1000
+
 	scanData := scanDataDto{
 		id:        id,
 		Link:      getVideoDataUrl(baseUrl, id),
-		Title:     vd.Title(),
+		Title:     title,
 		DateAdded: vd.SceneParts.Created_at.Format(time.DateOnly),
-		Duration:  vd.SceneParts.Files[0].Duration,
-		Tags:      getTags(vd),
+		Duration:  durationMs,
+		Tags:      getTags(vd, item.File),
 	}
+
 	if vd.SceneParts.Date != nil {
 		scanData.DateReleased = util.Ptr(util.NormalizeDate(*vd.SceneParts.Date))
 	}
