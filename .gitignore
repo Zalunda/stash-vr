@@ -1,4 +1,5 @@
 *.iml
+*_bin.exe
 /.idea/
 /graphql.config.yml
 /build/
