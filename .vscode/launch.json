@@ -10,7 +10,8 @@
             "env": {
                 // If stash-vr needs environment variables to connect to your stash instance, put them here
                 "STASH_GRAPHQL_URL": "http://192.168.2.101:9999/graphql",
-                "ENABLE_PARTS_EXPANSION": "true"
+                "ENABLE_PARTS_EXPANSION": "true",
+                "LOG_LEVEL": "trace"
             },
             "args": []
         }

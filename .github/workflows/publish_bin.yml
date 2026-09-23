@@ -8,13 +8,19 @@ on:
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-go@v5
         with:
           cache: true
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
