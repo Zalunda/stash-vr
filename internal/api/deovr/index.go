@@ -57,7 +57,7 @@ func buildIndex(sections []library.Section, vds map[string]*library.VideoData, b
 
 					videoUrl := getVideoDataUrl(baseUrl, sceneId)
 					if item.FileId != "" {
-						videoUrl += "?fileId=" + item.FileId
+						videoUrl += "/file/" + item.FileId
 					}
 
 					previewData := previewDataDto{
