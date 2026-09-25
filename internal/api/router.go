@@ -1,19 +1,21 @@
 package api
 
 import (
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"stash-vr/internal/api/deovr"
 	"stash-vr/internal/api/heatmap"
 	"stash-vr/internal/api/heresphere"
+	"stash-vr/internal/api/review"
 	"stash-vr/internal/api/web"
 	"stash-vr/internal/config"
 	"stash-vr/internal/library"
 	"stash-vr/internal/static"
 	"stash-vr/internal/util"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog/log"
 )
 
 func Router(libraryService *library.Service) *chi.Mux {
@@ -27,6 +29,8 @@ func Router(libraryService *library.Service) *chi.Mux {
 
 	router.Mount("/heresphere", logMod("heresphere", heresphere.Router(libraryService)))
 	router.Mount("/deovr", logMod("deovr", deovr.Router(libraryService)))
+
+	router.Mount("/review", logMod("review", review.Router()))
 
 	router.Post("/filters", logMod("filters", web.FiltersUpdateHandler()).ServeHTTP)
 	router.Get("/cover/{videoId}", logMod("heatmap", heatmap.CoverHandler(libraryService)).ServeHTTP)

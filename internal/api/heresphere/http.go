@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"stash-vr/internal/api/internal"
 	"stash-vr/internal/library"
+	"stash-vr/internal/reviews"
 	"stash-vr/internal/stash"
 	"stash-vr/internal/util"
 	"strings"
@@ -115,6 +116,27 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 
 	// 3. Find the label for the requested file
 	label := vd.GetFileLabels()[targetFileId]
+	if label == "" {
+		label = "Main"
+	}
+
+	// Ensure Session has the duration available
+	reviews.EnsureSession(realId, vd.Title(), GetSceneTagNames(vd))
+
+	// Ensure the specific file's duration is available
+	fileDuration := 0.0
+	if len(vd.SceneParts.Files) > 0 {
+		targetFile := vd.SceneParts.Files[0]
+		if targetFileId != "" {
+			for _, f := range vd.SceneParts.Files {
+				if f.Id == targetFileId {
+					targetFile = f
+					break
+				}
+			}
+		}
+		fileDuration = targetFile.Duration
+	}
 
 	// 5. Change the primary file in the DB ONLY if the user actually clicked play!
 	if isPlayRequest && targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
@@ -133,12 +155,13 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 	}
 
 	// 5. Handle ratings/favorites updates
-	if vdReq, err := internal.UnmarshalBody[videoDataRequestDto](req); err == nil {
+	if hasReqBody {
 		if vdReq.DeleteFile != nil && *vdReq.DeleteFile {
 			h.libraryService.Delete(ctx, realId)
 			return
 		}
-		go h.processUpdates(realId, vdReq)
+		// PASS targetFileId AND label DOWN!
+		go h.processUpdates(realId, targetFileId, label, fileDuration, vdReq)
 	}
 
 	// 6. Build the video data and pass the label AND targetFileId!
@@ -156,7 +179,7 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 	}
 }
 
-func (h *httpHandler) processUpdates(videoId string, vdReq videoDataRequestDto) {
+func (h *httpHandler) processUpdates(videoId, fileId, label string, duration float64, vdReq videoDataRequestDto) {
 	ctx := context.Background()
 	needsRefetch := false
 	if vdReq.Rating != nil {
@@ -172,7 +195,7 @@ func (h *httpHandler) processUpdates(videoId string, vdReq videoDataRequestDto) 
 		needsRefetch = true
 	}
 	if vdReq.Tags != nil {
-		h.processIncomingTags(ctx, videoId, vdReq)
+		h.processIncomingTags(ctx, videoId, fileId, label, duration, vdReq)
 		needsRefetch = true
 	}
 	if needsRefetch {
@@ -183,7 +206,7 @@ func (h *httpHandler) processUpdates(videoId string, vdReq videoDataRequestDto) 
 	}
 }
 
-func (h *httpHandler) processIncomingTags(ctx context.Context, videoId string, vdReq videoDataRequestDto) {
+func (h *httpHandler) processIncomingTags(ctx context.Context, videoId, fileId, label string, duration float64, vdReq videoDataRequestDto) {
 	newTags := make([]string, 0)
 	newMarkers := make([]library.MarkerDto, 0)
 
@@ -192,11 +215,36 @@ func (h *httpHandler) processIncomingTags(ctx context.Context, videoId string, v
 	hasOCount := false
 	hasRating := false
 
+	var incomingNotes []reviews.TimedNote
+	rangedStarts := make(map[string]float64)
+	rangedEnds := make(map[string]float64)
+
 	for _, t := range *vdReq.Tags {
 		key, arg, _ := strings.Cut(t.Name, ":")
-
 		if key == "" {
 			continue
+		}
+
+		// --- INTERCEPT REVIEW NOTES ---
+		if key == "ReviewNote" {
+			if strings.HasSuffix(arg, ":Start") {
+				noteName := strings.TrimSuffix(arg, ":Start")
+				rangedStarts[noteName] = t.Start / 1000.0
+			} else if strings.HasSuffix(arg, ":End") {
+				noteName := strings.TrimSuffix(arg, ":End")
+				rangedEnds[noteName] = t.Start / 1000.0
+			} else {
+				// Standard Timed Note
+				// We ONLY care about the point dropped. Ignore t.End completely.
+				incomingNotes = append(incomingNotes, reviews.TimedNote{
+					FileLabel:  label,
+					ConfigName: reviews.GetConfigNameForNote(arg),
+					StartTime:  t.Start / 1000.0,
+					EndTime:    nil, // Force nil so it doesn't create a massive range
+					Note:       arg,
+				})
+			}
+			continue // Prevent sending to Stash
 		}
 
 		switch key {
@@ -249,6 +297,47 @@ func (h *httpHandler) processIncomingTags(ctx context.Context, videoId string, v
 			m.EndSecond = util.Ptr(*t.End / 1000)
 		}
 		newMarkers = append(newMarkers, m)
+	}
+
+	// Pair up the Ranged Notes
+	for noteName, startT := range rangedStarts {
+		var endPtr *float64
+		if endT, ok := rangedEnds[noteName]; ok {
+			// 0.0 means the user hasn't touched the :End tag yet!
+			// We only attach the End time if they actually moved it.
+			if endT > 0.0 {
+				e := endT
+				endPtr = &e
+			}
+		}
+
+		incomingNotes = append(incomingNotes, reviews.TimedNote{
+			FileLabel:  label,
+			ConfigName: reviews.GetConfigNameForNote(noteName),
+			StartTime:  startT,
+			EndTime:    endPtr,
+			Note:       noteName,
+		})
+	}
+
+	for noteName, endT := range rangedEnds {
+		if _, ok := rangedStarts[noteName]; !ok {
+			if endT > 0.0 {
+				e := endT
+				incomingNotes = append(incomingNotes, reviews.TimedNote{
+					FileLabel:  label,
+					ConfigName: reviews.GetConfigNameForNote(noteName),
+					StartTime:  0.0,
+					EndTime:    &e,
+					Note:       noteName,
+				})
+			}
+		}
+	}
+
+	// Sync ALL tags to the event log
+	if len(incomingNotes) > 0 || len(*vdReq.Tags) > 0 {
+		reviews.RecordTagsDiff(videoId, label, duration, incomingNotes)
 	}
 
 	if !hasPlayCount {
@@ -314,16 +403,28 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 		if h.ps == nil {
 			h.ps = newPlayback(vd, fileId)
 		} else if h.ps.sceneId != realId || h.ps.fileId != fileId {
-			// Trigger stop if they switch to a different scene OR a different part of the same scene
 			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
 			h.ps = newPlayback(vd, fileId)
 		} else {
 			h.ps.handleResume()
 		}
+
+		label := vd.GetFileLabels()[fileId]
+		if label == "" {
+			label = "Main"
+		}
+		reviews.RecordPlayStart(realId, label, float64(ev.Time)/1000.0)
+
 	case evPause, evClose:
 		if h.ps != nil {
 			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
 		}
+
+		label := vd.GetFileLabels()[fileId]
+		if label == "" {
+			label = "Main"
+		}
+		reviews.RecordPlayStop(realId, label, float64(ev.Time)/1000.0)
 	default:
 	}
 }

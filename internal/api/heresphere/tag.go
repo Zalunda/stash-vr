@@ -8,6 +8,7 @@ import (
 	"stash-vr/internal/config"
 	"stash-vr/internal/library"
 	"stash-vr/internal/prefix"
+	"stash-vr/internal/reviews"
 	"stash-vr/internal/stash/gql"
 	"stash-vr/internal/util"
 	"strconv"
@@ -82,12 +83,43 @@ func addMultiTracks(target *[]tagDto, tags []tagDto, startTrack int) int {
 }
 
 func getTags(vd *library.VideoData, file *gql.ScenePartsFilesVideoFile) []tagDto {
-	// Multiply by 1000 for HereSphere (milliseconds) using the SPECIFIC file's duration
 	durationMs := file.Duration * 1000
-
 	var tags []tagDto
 
 	trackIndex := addTrack(&tags, getMarkers(vd), 0)
+
+	matchedConfigs := reviews.GetMatchedConfigs(GetSceneTagNames(vd))
+	var reviewTags []tagDto
+	for _, conf := range matchedConfigs {
+
+		// 1. Timed Notes
+		for _, note := range conf.TimedNotes {
+			endSec := file.Duration
+			reviewTags = append(reviewTags, tagDto{
+				Name:  "ReviewNote:" + note,
+				Start: 0,
+				End:   &endSec,
+			})
+		}
+
+		// 2. Ranged Notes
+		for _, note := range conf.RangedNotes {
+			endSec := file.Duration
+			reviewTags = append(reviewTags, tagDto{
+				Name:  "ReviewNote:" + note + ":Start",
+				Start: 0,
+				End:   &endSec,
+			})
+			reviewTags = append(reviewTags, tagDto{
+				Name:  "ReviewNote:" + note + ":End",
+				Start: 0,
+				End:   &endSec,
+			})
+		}
+	}
+
+	// Put them on distinct tracks so they don't visually overlap and block each other
+	trackIndex = addMultiTracks(&tags, reviewTags, trackIndex)
 
 	if summary := getSummary(vd, false); summary != "" {
 		trackIndex = addSplitTrack(&tags, []tagDto{{Name: internal.LegendSummary + seperator + summary}}, trackIndex, durationMs)
@@ -293,4 +325,12 @@ func equallyDivideTagDurations(totalDuration float64, tags []tagDto) {
 			tags[i].End = &end
 		}
 	}
+}
+
+func GetSceneTagNames(vd *library.VideoData) []string {
+	var names []string
+	for _, t := range vd.SceneParts.Tags {
+		names = append(names, t.Name)
+	}
+	return names
 }
