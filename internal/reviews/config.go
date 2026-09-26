@@ -21,11 +21,21 @@ type GlobalFlagDef struct {
 
 type Config struct {
 	Id            string            `json:"id"`
+	Name          string            `json:"name"` // Optional clean name for UI groupings
 	Prefix        string            `json:"prefix"`
 	TriggerTags   []string          `json:"triggerTags"`
 	Imports       []string          `json:"imports"`
 	TimelineNotes []TimelineNoteDef `json:"timelineNotes"`
 	GlobalFlags   []GlobalFlagDef   `json:"globalFlags"`
+}
+
+type VisualNoteDef struct {
+	Category  string `json:"category"`
+	NoteName  string `json:"noteName"`
+	Label     string `json:"label"`
+	Type      string `json:"type"`
+	Sentiment string `json:"sentiment"`
+	ConfigId  string `json:"configId"`
 }
 
 var activeConfigs = make(map[string]Config)
@@ -50,24 +60,11 @@ func LoadConfigs() {
 			}
 		}
 	}
-
-	// 2. Resolve Imports (Merge configs)
-	for k, c := range activeConfigs {
-		for _, imp := range c.Imports {
-			if imported, ok := activeConfigs[imp]; ok {
-				c.TimelineNotes = append(c.TimelineNotes, imported.TimelineNotes...)
-				c.GlobalFlags = append(c.GlobalFlags, imported.GlobalFlags...)
-			}
-		}
-		c.TimelineNotes = removeDuplicateTimelineNotes(c.TimelineNotes)
-		c.GlobalFlags = removeDuplicateGlobalFlags(c.GlobalFlags)
-		activeConfigs[k] = c
-	}
 }
 
-// Matches scenes based on explicit tags, or falls back to "*" configs
+// GetMatchedConfigs finds the matching root configs and dynamically resolves their imports
 func GetMatchedConfigs(sceneTags []string) []Config {
-	var matched []Config
+	var roots []Config
 	var fallbacks []Config
 
 	for _, c := range activeConfigs {
@@ -83,21 +80,75 @@ func GetMatchedConfigs(sceneTags []string) []Config {
 		}
 
 		if isSpecificMatch {
-			matched = append(matched, c)
+			roots = append(roots, c)
 		}
 		if isFallback {
 			fallbacks = append(fallbacks, c)
 		}
 	}
 
-	// If the scene had explicit review tags, return those. Otherwise, return fallbacks.
-	if len(matched) > 0 {
-		return matched
+	var startNodes []Config
+	if len(roots) > 0 {
+		startNodes = roots
+	} else {
+		startNodes = fallbacks
 	}
-	return fallbacks
+
+	// Resolve the imports graph while keeping configs distinct
+	visited := make(map[string]bool)
+	var result []Config
+
+	var visit func(c Config)
+	visit = func(c Config) {
+		if visited[c.Id] {
+			return
+		}
+		visited[c.Id] = true
+		result = append(result, c)
+		for _, imp := range c.Imports {
+			if imported, ok := activeConfigs[imp]; ok {
+				visit(imported)
+			}
+		}
+	}
+
+	for _, c := range startNodes {
+		visit(c)
+	}
+
+	return result
 }
 
-// Matches the visual tag back to its config and sentiment
+// GetVisualNotes structures the notes for the Grid UI and groups them by their native config
+func GetVisualNotes(sceneTags []string) []VisualNoteDef {
+	configs := GetMatchedConfigs(sceneTags)
+	var notes []VisualNoteDef
+	encountered := map[string]bool{}
+
+	for _, c := range configs {
+		catName := c.Name
+		if catName == "" {
+			catName = c.Id // Fallback if "name" isn't in the JSON
+		}
+
+		for _, n := range c.TimelineNotes {
+			rawName := fmt.Sprintf("[%s] %s", c.Prefix, n.Label)
+			if !encountered[rawName] {
+				encountered[rawName] = true
+				notes = append(notes, VisualNoteDef{
+					Category:  catName,
+					NoteName:  rawName,
+					Label:     n.Label,
+					Type:      n.Type,
+					Sentiment: n.Sentiment,
+					ConfigId:  c.Id,
+				})
+			}
+		}
+	}
+	return notes
+}
+
 func GetNoteDetails(visualNoteName string) (configId string, sentiment string) {
 	for _, c := range activeConfigs {
 		for _, n := range c.TimelineNotes {
@@ -110,7 +161,6 @@ func GetNoteDetails(visualNoteName string) (configId string, sentiment string) {
 	return "Review", "General"
 }
 
-// Helpers
 func contains(slice []string, val string) bool {
 	for _, item := range slice {
 		if item == val {
@@ -118,18 +168,6 @@ func contains(slice []string, val string) bool {
 		}
 	}
 	return false
-}
-
-func removeDuplicateTimelineNotes(elements []TimelineNoteDef) []TimelineNoteDef {
-	encountered := map[string]bool{}
-	var result []TimelineNoteDef
-	for _, v := range elements {
-		if !encountered[v.Label] {
-			encountered[v.Label] = true
-			result = append(result, v)
-		}
-	}
-	return result
 }
 
 func removeDuplicateGlobalFlags(elements []GlobalFlagDef) []GlobalFlagDef {

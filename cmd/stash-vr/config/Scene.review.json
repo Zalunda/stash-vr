@@ -1,5 +1,6 @@
 {
   "id": "SceneReview",
+  "name": "Scene Content & Pacing",
   "prefix": "SCN",
   "triggerTags": ["*"],
   "imports": ["SubtitleReview", "FunscriptReview", "SourceVideoReview"],

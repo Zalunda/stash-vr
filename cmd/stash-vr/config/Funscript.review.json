@@ -1,5 +1,6 @@
 {
   "id": "FunscriptReview",
+  "name": "Funscript Sync & Intensity", 
   "prefix": "FS",
   "triggerTags": ["ReviewFunscript"],
   "imports": [],

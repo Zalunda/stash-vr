@@ -1,5 +1,6 @@
 {
   "id": "SubtitleReview",
+  "name": "Subtitles",
   "prefix": "SUB",
   "triggerTags": ["ReviewSubtitles"],
   "imports": [],

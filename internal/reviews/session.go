@@ -67,6 +67,7 @@ type Session struct {
 	SceneTitle    string
 	SafeTitle     string
 	MatchedConfig Config
+	VisualNotes   []VisualNoteDef // Cached for the UI
 	FileDurations map[string]float64
 	Events        []SessionEvent
 
@@ -76,11 +77,13 @@ type Session struct {
 	IsPlaying         bool
 	LastPlayRealTime  time.Time
 	LastPlayVideoTime float64
+	CurrentFileLabel  string
 }
 
 var (
-	mu             sync.Mutex
-	activeSessions = make(map[string]*Session)
+	mu                sync.Mutex
+	activeSessions    = make(map[string]*Session)
+	lastActiveSceneId string // Track the most recently active scene
 )
 
 func getSafeTitle(title string) string {
@@ -100,6 +103,8 @@ func EnsureSession(sceneId, title string, tags []string) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	lastActiveSceneId = sceneId
+
 	if _, ok := activeSessions[sceneId]; !ok {
 		matchedConfigs := GetMatchedConfigs(tags)
 		var mergedConfig Config
@@ -116,6 +121,7 @@ func EnsureSession(sceneId, title string, tags []string) {
 			SceneTitle:    title,
 			SafeTitle:     safeTitle,
 			MatchedConfig: mergedConfig,
+			VisualNotes:   GetVisualNotes(tags),
 			FileDurations: make(map[string]float64),
 			LastCursors:   make(map[string]TimedNote),
 		}
@@ -136,6 +142,12 @@ func GetSession(sceneId string) (*Session, bool) {
 	return s, ok
 }
 
+func GetLastActiveSceneId() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return lastActiveSceneId
+}
+
 // --- EVENT RECORDERS ---
 
 func (s *Session) appendEvent(ev SessionEvent) {
@@ -149,8 +161,12 @@ func (s *Session) appendEvent(ev SessionEvent) {
 func RecordPlayStart(sceneId, label string, videoTimeSec float64) {
 	mu.Lock()
 	defer mu.Unlock()
+
+	lastActiveSceneId = sceneId
+
 	if s, ok := activeSessions[sceneId]; ok {
 		now := time.Now()
+		s.CurrentFileLabel = label
 
 		if s.IsPlaying {
 			elapsed := now.Sub(s.LastPlayRealTime).Seconds()
@@ -268,6 +284,96 @@ func RecordTagsDiff(sceneId, label string, duration float64, incomingNotes []Tim
 	}
 }
 
+// Injects a note exactly at the tracked video playback time and returns the updated count
+func AddUINote(sceneId, noteName, configName, action string) int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	s, ok := activeSessions[sceneId]
+	if !ok {
+		return 0
+	}
+
+	label := s.CurrentFileLabel
+	if label == "" {
+		label = "Main"
+	}
+
+	vidTime := s.LastPlayVideoTime
+	now := time.Now()
+	if s.IsPlaying {
+		vidTime += now.Sub(s.LastPlayRealTime).Seconds()
+	}
+	if dur, ok := s.FileDurations[label]; ok && vidTime > dur {
+		vidTime = dur
+	}
+	if vidTime < 0 {
+		vidTime = 0
+	}
+
+	isDuplicate := false
+
+	if action == "start" || action == "point" {
+		// Anti-spam filter: ignore if the exact same note was dropped within 1 second of video time
+		for i := len(s.Events) - 1; i >= 0; i-- {
+			ev := s.Events[i]
+			if ev.Type == EventNoteAdded && ev.FileLabel == label && ev.NoteName == noteName {
+				if ev.NewStart != nil && math.Abs(*ev.NewStart-vidTime) < 1.0 {
+					isDuplicate = true
+					break
+				}
+			}
+		}
+
+		if !isDuplicate {
+			s.appendEvent(SessionEvent{
+				Timestamp:  now,
+				Type:       EventNoteAdded,
+				FileLabel:  label,
+				NoteName:   noteName,
+				ConfigName: configName,
+				NewStart:   &vidTime,
+				NewEnd:     nil,
+			})
+		}
+	} else if action == "end" {
+		// Find latest open note
+		var oldStart *float64
+		for i := len(s.Events) - 1; i >= 0; i-- {
+			ev := s.Events[i]
+			if (ev.Type == EventNoteAdded || ev.Type == EventNoteChanged) && ev.FileLabel == label && ev.NoteName == noteName {
+				oldStart = ev.NewStart
+				break
+			}
+		}
+		if oldStart != nil {
+			s.appendEvent(SessionEvent{
+				Timestamp:  now,
+				Type:       EventNoteChanged,
+				FileLabel:  label,
+				NoteName:   noteName,
+				ConfigName: configName,
+				OldStart:   oldStart,
+				OldEnd:     nil, // Assume it was previously open
+				NewStart:   oldStart,
+				NewEnd:     &vidTime,
+			})
+		}
+	}
+
+	// Calculate the actual current count of this note to return to the UI
+	state := s.Derive()
+	count := 0
+	for _, notes := range state.TimedNotes {
+		for _, n := range notes {
+			if n.Note == noteName {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 // --- STATE DERIVATION ---
 
 func (s *Session) Derive() DerivedState {
@@ -290,8 +396,6 @@ func (s *Session) Derive() DerivedState {
 					state.Played[ev.FileLabel] = append(state.Played[ev.FileLabel], TimeInterval{Start: start, End: ev.VideoTime})
 				} else {
 					// Time went backward (corrupted stop event).
-					// Do NOT flip them! If the gap is small (jitter), clamp it to 1 second.
-					// Otherwise, ignore the corrupted interval completely.
 					if start-ev.VideoTime < 2.0 {
 						state.Played[ev.FileLabel] = append(state.Played[ev.FileLabel], TimeInterval{Start: start, End: start + 1.0})
 					}
@@ -394,7 +498,6 @@ func (s *Session) SaveToFile() {
 		b.WriteString("           TIMELINE LOG\n")
 		b.WriteString("========================================\n")
 
-		// Sort chronologically
 		sort.Slice(allNotes, func(i, j int) bool {
 			if allNotes[i].FileLabel == allNotes[j].FileLabel {
 				return allNotes[i].StartTime < allNotes[j].StartTime

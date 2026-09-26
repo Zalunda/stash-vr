@@ -30,7 +30,7 @@ func Router(libraryService *library.Service) *chi.Mux {
 	router.Mount("/heresphere", logMod("heresphere", heresphere.Router(libraryService)))
 	router.Mount("/deovr", logMod("deovr", deovr.Router(libraryService)))
 
-	router.Mount("/review", logMod("review", review.Router()))
+	router.Mount("/review", logMod("review", review.Router(libraryService)))
 
 	router.Post("/filters", logMod("filters", web.FiltersUpdateHandler()).ServeHTTP)
 	router.Get("/cover/{videoId}", logMod("heatmap", heatmap.CoverHandler(libraryService)).ServeHTTP)

@@ -1,5 +1,6 @@
 {
   "id": "SourceVideoReview",
+  "name": "Video & Editing Quality",
   "prefix": "SRC",
   "triggerTags": [],
   "imports": [],
