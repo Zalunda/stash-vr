@@ -1,0 +1,12 @@
+{
+  "id": "SourceVideoReview",
+  "prefix": "SRC",
+  "triggerTags": [],
+  "imports": [],
+  "timelineNotes": [
+    { "label": "Scale/Stereo Issue", "type": "range", "sentiment": "issue" },
+    { "label": "Bad Cut / Transition", "type": "point", "sentiment": "issue" },
+    { "label": "Actor Distraction", "type": "range", "sentiment": "issue" }
+  ],
+  "globalFlags": []
+}

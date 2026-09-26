@@ -1,0 +1,12 @@
+{
+  "id": "SubtitleReview",
+  "prefix": "SUB",
+  "triggerTags": ["ReviewSubtitles"],
+  "imports": [],
+  "timelineNotes": [
+    { "label": "Missing", "type": "point", "sentiment": "issue" },
+    { "label": "Incoherent", "type": "range", "sentiment": "issue" },
+    { "label": "Great Impact", "type": "range", "sentiment": "positive" }
+  ],
+  "globalFlags": []
+}

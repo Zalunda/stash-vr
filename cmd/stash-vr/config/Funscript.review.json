@@ -1,0 +1,19 @@
+{
+  "id": "FunscriptReview",
+  "prefix": "FS",
+  "triggerTags": ["ReviewFunscript"],
+  "imports": [],
+  "timelineNotes": [
+    { "label": "Bad Sync", "type": "range", "sentiment": "issue" },
+    { "label": "Too Intense", "type": "range", "sentiment": "issue" },
+    { "label": "Not Intense Enough", "type": "range", "sentiment": "issue" },
+    { "label": "Perfect Section", "type": "range", "sentiment": "positive" }
+  ],
+  "globalFlags": [
+    {
+      "category": "Overall Rhythm",
+      "type": "enum-custom",
+      "options": ["Robotic/Generated", "Human/Hand-scripted", "Chaotic", "Other (Type below)"]
+    }
+  ]
+}

@@ -32,6 +32,7 @@ type TimedNote struct {
 	StartTime  float64  `json:"startTime"`
 	EndTime    *float64 `json:"endTime,omitempty"`
 	Note       string   `json:"note,omitempty"`
+	Sentiment  string   `json:"sentiment,omitempty"`
 }
 
 type SessionEvent struct {
@@ -102,13 +103,12 @@ func EnsureSession(sceneId, title string, tags []string) {
 	if _, ok := activeSessions[sceneId]; !ok {
 		matchedConfigs := GetMatchedConfigs(tags)
 		var mergedConfig Config
-		mergedConfig.GlobalFlags = make(map[string][]string)
+		mergedConfig.GlobalFlags = make([]GlobalFlagDef, 0)
 
 		for _, c := range matchedConfigs {
-			for cat, flags := range c.GlobalFlags {
-				mergedConfig.GlobalFlags[cat] = append(mergedConfig.GlobalFlags[cat], flags...)
-			}
+			mergedConfig.GlobalFlags = append(mergedConfig.GlobalFlags, c.GlobalFlags...)
 		}
+		mergedConfig.GlobalFlags = removeDuplicateGlobalFlags(mergedConfig.GlobalFlags)
 
 		safeTitle := getSafeTitle(title)
 		s := &Session{
@@ -362,8 +362,10 @@ func formatTimeSec(sec float64) string {
 func (s *Session) SaveToFile() {
 	state := s.Derive()
 	var b strings.Builder
+
 	b.WriteString(fmt.Sprintf("Scene: %s\n\n", s.SceneTitle))
 
+	// --- 1. PLAYED TIMES ---
 	if len(state.Played) > 0 {
 		b.WriteString("Played:\n")
 		var labels []string
@@ -380,45 +382,72 @@ func (s *Session) SaveToFile() {
 		b.WriteString("\n")
 	}
 
-	if len(state.TimedNotes) > 0 {
-		hasOutput := false
-		var labels []string
-		for lbl := range state.TimedNotes {
-			labels = append(labels, lbl)
-		}
-		sort.Strings(labels)
-
-		for _, lbl := range labels {
-			duration := s.FileDurations[lbl]
-			for _, n := range state.TimedNotes[lbl] {
-				// SKIP untouch tags (Start is 0, End is video duration)
-				if n.StartTime == 0 && n.EndTime != nil && math.Abs(*n.EndTime-duration) < 1.0 {
-					continue
-				}
-
-				if !hasOutput {
-					b.WriteString("Timed Notes:\n")
-					hasOutput = true
-				}
-
-				timeStr := formatTimeSec(n.StartTime)
-				// Format as range ONLY if End is not duration, and End > Start
-				if n.EndTime != nil && *n.EndTime > n.StartTime && math.Abs(*n.EndTime-duration) > 1.0 {
-					timeStr = fmt.Sprintf("%s->%s", timeStr, formatTimeSec(*n.EndTime))
-				}
-				b.WriteString(fmt.Sprintf("%s: %s %s: %s\n", n.FileLabel, timeStr, n.ConfigName, n.Note))
-			}
-		}
-		if hasOutput {
-			b.WriteString("\n")
-		}
+	// Group and sort notes
+	var allNotes []TimedNote
+	for _, notes := range state.TimedNotes {
+		allNotes = append(allNotes, notes...)
 	}
 
+	if len(allNotes) > 0 {
+		// --- 2. CHRONOLOGICAL TIMELINE LOG ---
+		b.WriteString("========================================\n")
+		b.WriteString("           TIMELINE LOG\n")
+		b.WriteString("========================================\n")
+
+		// Sort chronologically
+		sort.Slice(allNotes, func(i, j int) bool {
+			if allNotes[i].FileLabel == allNotes[j].FileLabel {
+				return allNotes[i].StartTime < allNotes[j].StartTime
+			}
+			return allNotes[i].FileLabel < allNotes[j].FileLabel
+		})
+
+		for _, n := range allNotes {
+			timeStr := formatTimeSec(n.StartTime)
+			if n.EndTime != nil && *n.EndTime > n.StartTime {
+				timeStr = fmt.Sprintf("%s->%s", timeStr, formatTimeSec(*n.EndTime))
+			}
+			b.WriteString(fmt.Sprintf("%s: %-19s %s\n", n.FileLabel, timeStr, n.Note))
+		}
+		b.WriteString("\n")
+
+		// --- 3. FEEDBACK SUMMARY ---
+		b.WriteString("========================================\n")
+		b.WriteString("         FEEDBACK SUMMARY\n")
+		b.WriteString("========================================\n")
+
+		// Group by Sentiment -> Note Name -> Instances
+		summary := make(map[string]map[string][]string)
+		for _, n := range allNotes {
+			sent := "General"
+			if n.Sentiment != "" {
+				sent = n.Sentiment
+			}
+
+			if summary[sent] == nil {
+				summary[sent] = make(map[string][]string)
+			}
+
+			timeStr := formatTimeSec(n.StartTime)
+			if n.EndTime != nil && *n.EndTime > n.StartTime {
+				timeStr = fmt.Sprintf("%s->%s", timeStr, formatTimeSec(*n.EndTime))
+			}
+			summary[sent][n.Note] = append(summary[sent][n.Note], fmt.Sprintf("  - %s: %s", n.FileLabel, timeStr))
+		}
+
+		printCategory(&b, summary, "issue", "--- ISSUES & CRITIQUES ---")
+		printCategory(&b, summary, "positive", "--- POSITIVES & HIGHLIGHTS ---")
+		printCategory(&b, summary, "General", "--- OTHER NOTES ---")
+	}
+
+	// --- 4. GLOBAL FLAGS ---
 	hasFlags := false
 	for cat, flags := range state.GlobalFlags {
 		if len(flags) > 0 {
 			if !hasFlags {
-				b.WriteString("Global Flags:\n")
+				b.WriteString("========================================\n")
+				b.WriteString("           GLOBAL FLAGS\n")
+				b.WriteString("========================================\n")
 				hasFlags = true
 			}
 			b.WriteString(fmt.Sprintf("[%s]\n", cat))
@@ -430,6 +459,26 @@ func (s *Session) SaveToFile() {
 
 	path := filepath.Join("review-notes", s.SafeTitle+"-ReviewNote.txt")
 	os.WriteFile(path, []byte(b.String()), 0644)
+}
+
+func printCategory(b *strings.Builder, summary map[string]map[string][]string, sentimentKey, title string) {
+	if categoryMap, ok := summary[sentimentKey]; ok && len(categoryMap) > 0 {
+		b.WriteString(title + "\n")
+
+		var names []string
+		for k := range categoryMap {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			b.WriteString(fmt.Sprintf("%s:\n", name))
+			for _, instance := range categoryMap[name] {
+				b.WriteString(fmt.Sprintf("%s\n", instance))
+			}
+		}
+		b.WriteString("\n")
+	}
 }
 
 // Utils

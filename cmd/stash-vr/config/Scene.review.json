@@ -1,0 +1,11 @@
+{
+  "id": "SceneReview",
+  "prefix": "SCN",
+  "triggerTags": ["*"],
+  "imports": ["SubtitleReview", "FunscriptReview", "SourceVideoReview"],
+  "timelineNotes": [
+    { "label": "Boring", "type": "range", "sentiment": "issue" },
+    { "label": "Favorite Moment", "type": "range", "sentiment": "highlight" }
+  ],
+  "globalFlags": []
+}

@@ -234,14 +234,15 @@ func (h *httpHandler) processIncomingTags(ctx context.Context, videoId, fileId, 
 				noteName := strings.TrimSuffix(arg, ":End")
 				rangedEnds[noteName] = t.Start / 1000.0
 			} else {
-				// Standard Timed Note
-				// We ONLY care about the point dropped. Ignore t.End completely.
+				// Standard Point Note
+				configId, sentiment := reviews.GetNoteDetails(arg)
 				incomingNotes = append(incomingNotes, reviews.TimedNote{
 					FileLabel:  label,
-					ConfigName: reviews.GetConfigNameForNote(arg),
+					ConfigName: configId,
 					StartTime:  t.Start / 1000.0,
-					EndTime:    nil, // Force nil so it doesn't create a massive range
+					EndTime:    nil,
 					Note:       arg,
+					Sentiment:  sentiment,
 				})
 			}
 			continue // Prevent sending to Stash
@@ -303,20 +304,20 @@ func (h *httpHandler) processIncomingTags(ctx context.Context, videoId, fileId, 
 	for noteName, startT := range rangedStarts {
 		var endPtr *float64
 		if endT, ok := rangedEnds[noteName]; ok {
-			// 0.0 means the user hasn't touched the :End tag yet!
-			// We only attach the End time if they actually moved it.
 			if endT > 0.0 {
 				e := endT
 				endPtr = &e
 			}
 		}
 
+		configId, sentiment := reviews.GetNoteDetails(noteName)
 		incomingNotes = append(incomingNotes, reviews.TimedNote{
 			FileLabel:  label,
-			ConfigName: reviews.GetConfigNameForNote(noteName),
+			ConfigName: configId,
 			StartTime:  startT,
 			EndTime:    endPtr,
 			Note:       noteName,
+			Sentiment:  sentiment,
 		})
 	}
 
@@ -324,12 +325,14 @@ func (h *httpHandler) processIncomingTags(ctx context.Context, videoId, fileId, 
 		if _, ok := rangedStarts[noteName]; !ok {
 			if endT > 0.0 {
 				e := endT
+				configId, sentiment := reviews.GetNoteDetails(noteName)
 				incomingNotes = append(incomingNotes, reviews.TimedNote{
 					FileLabel:  label,
-					ConfigName: reviews.GetConfigNameForNote(noteName),
+					ConfigName: configId,
 					StartTime:  0.0,
 					EndTime:    &e,
 					Note:       noteName,
+					Sentiment:  sentiment,
 				})
 			}
 		}
