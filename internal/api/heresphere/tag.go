@@ -8,7 +8,6 @@ import (
 	"stash-vr/internal/config"
 	"stash-vr/internal/library"
 	"stash-vr/internal/prefix"
-	"stash-vr/internal/reviews"
 	"stash-vr/internal/stash/gql"
 	"stash-vr/internal/util"
 	"strconv"
@@ -89,39 +88,6 @@ func getTags(vd *library.VideoData, file *gql.ScenePartsFilesVideoFile) []tagDto
 	var tags []tagDto
 
 	trackIndex := addTrack(&tags, getMarkers(vd), 0)
-
-	// --- 1. MATCH CONFIGS ---
-	sceneTags := GetSceneTagNames(vd)
-	matchedConfigs := reviews.GetMatchedConfigs(sceneTags)
-
-	// --- 2. BUILD REVIEW TAGS ---
-	var reviewTags []tagDto
-	for _, conf := range matchedConfigs {
-		for _, note := range conf.TimelineNotes {
-			baseName := fmt.Sprintf("[%s] %s", conf.Prefix, note.Label)
-			endSec := file.Duration
-
-			if note.Type == "point" {
-				reviewTags = append(reviewTags, tagDto{
-					Name:  "ReviewNote:" + baseName,
-					Start: 0,
-					End:   &endSec,
-				})
-			} else if note.Type == "range" {
-				reviewTags = append(reviewTags, tagDto{
-					Name:  "ReviewNote:" + baseName + ":Start",
-					Start: 0,
-					End:   &endSec,
-				})
-				reviewTags = append(reviewTags, tagDto{
-					Name:  "ReviewNote:" + baseName + ":End",
-					Start: 0,
-					End:   &endSec,
-				})
-			}
-		}
-	}
-	trackIndex = addMultiTracks(&tags, reviewTags, trackIndex)
 
 	if summary := getSummary(vd, false); summary != "" {
 		trackIndex = addSplitTrack(&tags, []tagDto{{Name: internal.LegendSummary + seperator + summary}}, trackIndex, durationMs)

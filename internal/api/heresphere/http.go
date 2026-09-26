@@ -123,21 +123,6 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 	// Ensure Session has the duration available
 	reviews.EnsureSession(realId, vd.Title(), GetSceneTagNames(vd))
 
-	// Ensure the specific file's duration is available
-	fileDuration := 0.0
-	if len(vd.SceneParts.Files) > 0 {
-		targetFile := vd.SceneParts.Files[0]
-		if targetFileId != "" {
-			for _, f := range vd.SceneParts.Files {
-				if f.Id == targetFileId {
-					targetFile = f
-					break
-				}
-			}
-		}
-		fileDuration = targetFile.Duration
-	}
-
 	// 5. Change the primary file in the DB ONLY if the user actually clicked play!
 	if isPlayRequest && targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
 		log.Ctx(ctx).Info().Str("scene", realId).Str("file", targetFileId).Msg("Switching Primary File for Multi-part Scene")
@@ -160,8 +145,7 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 			h.libraryService.Delete(ctx, realId)
 			return
 		}
-		// PASS targetFileId AND label DOWN!
-		go h.processUpdates(realId, targetFileId, label, fileDuration, vdReq)
+		go h.processUpdates(realId, vdReq)
 	}
 
 	// 6. Build the video data and pass the label AND targetFileId!
@@ -179,7 +163,7 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 	}
 }
 
-func (h *httpHandler) processUpdates(videoId, fileId, label string, duration float64, vdReq videoDataRequestDto) {
+func (h *httpHandler) processUpdates(videoId string, vdReq videoDataRequestDto) {
 	ctx := context.Background()
 	needsRefetch := false
 	if vdReq.Rating != nil {
@@ -195,7 +179,7 @@ func (h *httpHandler) processUpdates(videoId, fileId, label string, duration flo
 		needsRefetch = true
 	}
 	if vdReq.Tags != nil {
-		h.processIncomingTags(ctx, videoId, fileId, label, duration, vdReq)
+		h.processIncomingTags(ctx, videoId, vdReq)
 		needsRefetch = true
 	}
 	if needsRefetch {
@@ -206,7 +190,7 @@ func (h *httpHandler) processUpdates(videoId, fileId, label string, duration flo
 	}
 }
 
-func (h *httpHandler) processIncomingTags(ctx context.Context, videoId, fileId, label string, duration float64, vdReq videoDataRequestDto) {
+func (h *httpHandler) processIncomingTags(ctx context.Context, videoId string, vdReq videoDataRequestDto) {
 	newTags := make([]string, 0)
 	newMarkers := make([]library.MarkerDto, 0)
 
@@ -215,37 +199,11 @@ func (h *httpHandler) processIncomingTags(ctx context.Context, videoId, fileId, 
 	hasOCount := false
 	hasRating := false
 
-	var incomingNotes []reviews.TimedNote
-	rangedStarts := make(map[string]float64)
-	rangedEnds := make(map[string]float64)
-
 	for _, t := range *vdReq.Tags {
 		key, arg, _ := strings.Cut(t.Name, ":")
+
 		if key == "" {
 			continue
-		}
-
-		// --- INTERCEPT REVIEW NOTES ---
-		if key == "ReviewNote" {
-			if strings.HasSuffix(arg, ":Start") {
-				noteName := strings.TrimSuffix(arg, ":Start")
-				rangedStarts[noteName] = t.Start / 1000.0
-			} else if strings.HasSuffix(arg, ":End") {
-				noteName := strings.TrimSuffix(arg, ":End")
-				rangedEnds[noteName] = t.Start / 1000.0
-			} else {
-				// Standard Point Note
-				configId, sentiment := reviews.GetNoteDetails(arg)
-				incomingNotes = append(incomingNotes, reviews.TimedNote{
-					FileLabel:  label,
-					ConfigName: configId,
-					StartTime:  t.Start / 1000.0,
-					EndTime:    nil,
-					Note:       arg,
-					Sentiment:  sentiment,
-				})
-			}
-			continue // Prevent sending to Stash
 		}
 
 		switch key {
@@ -298,49 +256,6 @@ func (h *httpHandler) processIncomingTags(ctx context.Context, videoId, fileId, 
 			m.EndSecond = util.Ptr(*t.End / 1000)
 		}
 		newMarkers = append(newMarkers, m)
-	}
-
-	// Pair up the Ranged Notes
-	for noteName, startT := range rangedStarts {
-		var endPtr *float64
-		if endT, ok := rangedEnds[noteName]; ok {
-			if endT > 0.0 {
-				e := endT
-				endPtr = &e
-			}
-		}
-
-		configId, sentiment := reviews.GetNoteDetails(noteName)
-		incomingNotes = append(incomingNotes, reviews.TimedNote{
-			FileLabel:  label,
-			ConfigName: configId,
-			StartTime:  startT,
-			EndTime:    endPtr,
-			Note:       noteName,
-			Sentiment:  sentiment,
-		})
-	}
-
-	for noteName, endT := range rangedEnds {
-		if _, ok := rangedStarts[noteName]; !ok {
-			if endT > 0.0 {
-				e := endT
-				configId, sentiment := reviews.GetNoteDetails(noteName)
-				incomingNotes = append(incomingNotes, reviews.TimedNote{
-					FileLabel:  label,
-					ConfigName: configId,
-					StartTime:  0.0,
-					EndTime:    &e,
-					Note:       noteName,
-					Sentiment:  sentiment,
-				})
-			}
-		}
-	}
-
-	// Sync ALL tags to the event log
-	if len(incomingNotes) > 0 || len(*vdReq.Tags) > 0 {
-		reviews.RecordTagsDiff(videoId, label, duration, incomingNotes)
 	}
 
 	if !hasPlayCount {
@@ -416,7 +331,23 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 		if label == "" {
 			label = "Main"
 		}
-		reviews.RecordPlayStart(realId, label, float64(ev.Time)/1000.0)
+
+		// Calculate the file duration to pass down to the Review Session tracker
+		fileDuration := 0.0
+		if len(vd.SceneParts.Files) > 0 {
+			targetFile := vd.SceneParts.Files[0]
+			if fileId != "" {
+				for _, f := range vd.SceneParts.Files {
+					if f.Id == fileId {
+						targetFile = f
+						break
+					}
+				}
+			}
+			fileDuration = targetFile.Duration
+		}
+
+		reviews.RecordPlayStart(realId, label, float64(ev.Time)/1000.0, fileDuration)
 
 	case evPause, evClose:
 		if h.ps != nil {

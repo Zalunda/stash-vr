@@ -71,13 +71,11 @@ type Session struct {
 	FileDurations map[string]float64
 	Events        []SessionEvent
 
-	LastCursors map[string]TimedNote
-
 	// Playback State for detecting Seek gaps
 	IsPlaying         bool
 	LastPlayRealTime  time.Time
 	LastPlayVideoTime float64
-	CurrentFileLabel  string
+	CurrentFileLabel  string // Tracks active file part
 }
 
 var (
@@ -123,7 +121,6 @@ func EnsureSession(sceneId, title string, tags []string) {
 			MatchedConfig: mergedConfig,
 			VisualNotes:   GetVisualNotes(tags),
 			FileDurations: make(map[string]float64),
-			LastCursors:   make(map[string]TimedNote),
 		}
 
 		rawPath := filepath.Join("review-notes", safeTitle+".raw.json")
@@ -158,7 +155,7 @@ func (s *Session) appendEvent(ev SessionEvent) {
 	s.SaveToFile()
 }
 
-func RecordPlayStart(sceneId, label string, videoTimeSec float64) {
+func RecordPlayStart(sceneId, label string, videoTimeSec float64, fileDuration float64) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -167,6 +164,7 @@ func RecordPlayStart(sceneId, label string, videoTimeSec float64) {
 	if s, ok := activeSessions[sceneId]; ok {
 		now := time.Now()
 		s.CurrentFileLabel = label
+		s.FileDurations[label] = fileDuration
 
 		if s.IsPlaying {
 			elapsed := now.Sub(s.LastPlayRealTime).Seconds()
@@ -229,58 +227,6 @@ func RecordFlagsSync(sceneId string, flags map[string][]string) {
 	defer mu.Unlock()
 	if s, ok := activeSessions[sceneId]; ok {
 		s.appendEvent(SessionEvent{Timestamp: time.Now(), Type: EventFlagsSync, Flags: flags})
-	}
-}
-
-func RecordTagsDiff(sceneId, label string, duration float64, incomingNotes []TimedNote) {
-	mu.Lock()
-	defer mu.Unlock()
-	s, ok := activeSessions[sceneId]
-	if !ok {
-		return
-	}
-
-	if s.LastCursors == nil {
-		s.LastCursors = make(map[string]TimedNote)
-	}
-	s.FileDurations[label] = duration
-
-	var newEvents []SessionEvent
-
-	for _, n := range incomingNotes {
-		cursorKey := label + "|" + n.Note
-		last, exists := s.LastCursors[cursorKey]
-
-		if !exists {
-			// Untouched tags start at 0, with NO end time (since we fixed http.go)
-			last = TimedNote{StartTime: 0.0, EndTime: nil}
-		}
-
-		startChanged := !floatEquals(n.StartTime, last.StartTime)
-		endChanged := !floatPtrEquals(n.EndTime, last.EndTime)
-
-		if startChanged {
-			// ALWAYS drop a new pin when Start moves
-			newEvents = append(newEvents, SessionEvent{
-				Timestamp: time.Now(), Type: EventNoteAdded, FileLabel: label,
-				NoteName: n.Note, ConfigName: n.ConfigName,
-				NewStart: &n.StartTime, NewEnd: n.EndTime,
-			})
-		} else if endChanged {
-			// Update the last pin when End moves
-			newEvents = append(newEvents, SessionEvent{
-				Timestamp: time.Now(), Type: EventNoteChanged, FileLabel: label,
-				NoteName: n.Note, ConfigName: n.ConfigName,
-				OldStart: &last.StartTime, OldEnd: last.EndTime,
-				NewStart: &n.StartTime, NewEnd: n.EndTime,
-			})
-		}
-
-		s.LastCursors[cursorKey] = n
-	}
-
-	for _, ev := range newEvents {
-		s.appendEvent(ev)
 	}
 }
 
@@ -469,7 +415,6 @@ func (s *Session) SaveToFile() {
 
 	b.WriteString(fmt.Sprintf("Scene: %s\n\n", s.SceneTitle))
 
-	// --- 1. PLAYED TIMES ---
 	if len(state.Played) > 0 {
 		b.WriteString("Played:\n")
 		var labels []string
@@ -486,14 +431,12 @@ func (s *Session) SaveToFile() {
 		b.WriteString("\n")
 	}
 
-	// Group and sort notes
 	var allNotes []TimedNote
 	for _, notes := range state.TimedNotes {
 		allNotes = append(allNotes, notes...)
 	}
 
 	if len(allNotes) > 0 {
-		// --- 2. CHRONOLOGICAL TIMELINE LOG ---
 		b.WriteString("========================================\n")
 		b.WriteString("           TIMELINE LOG\n")
 		b.WriteString("========================================\n")
@@ -514,12 +457,10 @@ func (s *Session) SaveToFile() {
 		}
 		b.WriteString("\n")
 
-		// --- 3. FEEDBACK SUMMARY ---
 		b.WriteString("========================================\n")
 		b.WriteString("         FEEDBACK SUMMARY\n")
 		b.WriteString("========================================\n")
 
-		// Group by Sentiment -> Note Name -> Instances
 		summary := make(map[string]map[string][]string)
 		for _, n := range allNotes {
 			sent := "General"
@@ -543,7 +484,6 @@ func (s *Session) SaveToFile() {
 		printCategory(&b, summary, "General", "--- OTHER NOTES ---")
 	}
 
-	// --- 4. GLOBAL FLAGS ---
 	hasFlags := false
 	for cat, flags := range state.GlobalFlags {
 		if len(flags) > 0 {
