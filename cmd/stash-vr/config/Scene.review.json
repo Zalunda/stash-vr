@@ -2,7 +2,7 @@
   "id": "SceneReview",
   "name": "Scene Content & Pacing",
   "prefix": "SCN",
-  "triggerTags": ["*"],
+  "triggerTags": ["ReviewScene"],
   "imports": ["SubtitleReview", "FunscriptReview", "SourceVideoReview"],
   "timelineNotes": [
     { "label": "Boring", "type": "range", "sentiment": "issue" },

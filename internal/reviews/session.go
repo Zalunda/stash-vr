@@ -409,6 +409,16 @@ func formatTimeSec(sec float64) string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
+func formatDurationSec(sec float64) string {
+	h := int(sec) / 3600
+	m := (int(sec) % 3600) / 60
+	s := int(sec) % 60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%d:%02d", m, s)
+}
+
 func (s *Session) SaveToFile() {
 	state := s.Derive()
 	var b strings.Builder
@@ -424,8 +434,52 @@ func (s *Session) SaveToFile() {
 		sort.Strings(labels)
 
 		for _, lbl := range labels {
-			for _, inv := range state.Played[lbl] {
-				b.WriteString(fmt.Sprintf("%s: %s-%s\n", lbl, formatTimeSec(inv.Start), formatTimeSec(inv.End)))
+			intervals := state.Played[lbl]
+
+			var lastSolidEnd float64 = -1.0
+			var hasMicroPlays bool = false
+			var solidCount int = 0
+
+			for _, inv := range intervals {
+				duration := inv.End - inv.Start
+
+				// Filter out micro-plays (scrubbing/skipping)
+				if duration <= 3.0 {
+					hasMicroPlays = true
+					continue
+				}
+
+				solidCount++
+				gapText := ""
+
+				if lastSolidEnd != -1.0 {
+					gap := inv.Start - lastSolidEnd
+					if gap > 2.0 {
+						// If they scrubbed through this gap, it's a skip. If they just clicked ahead, it's a jump.
+						if hasMicroPlays {
+							gapText = fmt.Sprintf(" SKIPPED %s", formatDurationSec(gap))
+						} else {
+							gapText = fmt.Sprintf(" JUMPED %s", formatDurationSec(gap))
+						}
+					}
+				} else if inv.Start > 5.0 {
+					// Gap before the very first play block starts
+					if hasMicroPlays {
+						gapText = fmt.Sprintf(" SKIPPED %s", formatDurationSec(inv.Start))
+					} else {
+						gapText = fmt.Sprintf(" JUMPED %s", formatDurationSec(inv.Start))
+					}
+				}
+
+				b.WriteString(fmt.Sprintf("%s: %s-%s%s\n", lbl, formatTimeSec(inv.Start), formatTimeSec(inv.End), gapText))
+
+				lastSolidEnd = inv.End
+				hasMicroPlays = false
+			}
+
+			// If they opened the file and ONLY fast forwarded through it without ever stopping
+			if solidCount == 0 && hasMicroPlays {
+				b.WriteString(fmt.Sprintf("%s: SCRUBBED ONLY\n", lbl))
 			}
 		}
 		b.WriteString("\n")
