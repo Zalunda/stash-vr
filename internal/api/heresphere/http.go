@@ -116,12 +116,9 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 
 	// 3. Find the label for the requested file
 	label := vd.GetFileLabels()[targetFileId]
-	if label == "" {
-		label = "Main"
-	}
 
-	// Ensure Session has the duration available
-	reviews.EnsureSession(realId, vd.Title(), GetSceneTagNames(vd))
+	// 4. Ensure a review Session exists
+	reviews.EnsureSession(vd)
 
 	// 5. Change the primary file in the DB ONLY if the user actually clicked play!
 	if isPlayRequest && targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
@@ -139,7 +136,7 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 		}
 	}
 
-	// 5. Handle ratings/favorites updates
+	// 6. Handle ratings/favorites updates
 	if hasReqBody {
 		if vdReq.DeleteFile != nil && *vdReq.DeleteFile {
 			h.libraryService.Delete(ctx, realId)
@@ -148,7 +145,7 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 		go h.processUpdates(realId, vdReq)
 	}
 
-	// 6. Build the video data and pass the label AND targetFileId!
+	// 7. Build the video data and pass the label AND targetFileId!
 	dto, err := buildVideoData(ctx, vd, baseUrl, label, targetFileId)
 	if err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("failed to build video data")
@@ -321,44 +318,21 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 		if h.ps == nil {
 			h.ps = newPlayback(vd, fileId)
 		} else if h.ps.sceneId != realId || h.ps.fileId != fileId {
+			// Trigger stop if they switch to a different scene OR a different part of the same scene
 			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
 			h.ps = newPlayback(vd, fileId)
 		} else {
 			h.ps.handleResume()
 		}
 
-		label := vd.GetFileLabels()[fileId]
-		if label == "" {
-			label = "Main"
-		}
-
-		// Calculate the file duration to pass down to the Review Session tracker
-		fileDuration := 0.0
-		if len(vd.SceneParts.Files) > 0 {
-			targetFile := vd.SceneParts.Files[0]
-			if fileId != "" {
-				for _, f := range vd.SceneParts.Files {
-					if f.Id == fileId {
-						targetFile = f
-						break
-					}
-				}
-			}
-			fileDuration = targetFile.Duration
-		}
-
-		reviews.RecordPlayStart(realId, label, float64(ev.Time)/1000.0, fileDuration)
+		reviews.RecordPlayStart(realId, vd.GetFileLabels()[fileId], float64(ev.Time)/1000.0, h.ps.videoDuration)
 
 	case evPause, evClose:
 		if h.ps != nil {
 			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
 		}
 
-		label := vd.GetFileLabels()[fileId]
-		if label == "" {
-			label = "Main"
-		}
-		reviews.RecordPlayStop(realId, label, float64(ev.Time)/1000.0)
+		reviews.RecordPlayStop(realId, vd.GetFileLabels()[fileId], float64(ev.Time)/1000.0)
 	default:
 	}
 }

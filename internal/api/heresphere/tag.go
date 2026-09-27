@@ -294,11 +294,3 @@ func equallyDivideTagDurations(totalDuration float64, tags []tagDto) {
 		}
 	}
 }
-
-func GetSceneTagNames(vd *library.VideoData) []string {
-	var names []string
-	for _, t := range vd.SceneParts.Tags {
-		names = append(names, t.Name)
-	}
-	return names
-}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"stash-vr/internal/library"
 	"strings"
 	"sync"
 	"time"
@@ -97,13 +98,21 @@ func getSafeTitle(title string) string {
 	return safe
 }
 
-func EnsureSession(sceneId, title string, tags []string) {
+func EnsureSession(vd *library.VideoData) {
+	sceneId := vd.Id()
+	title := vd.Title()
+
 	mu.Lock()
 	defer mu.Unlock()
 
 	lastActiveSceneId = sceneId
 
 	if _, ok := activeSessions[sceneId]; !ok {
+		var tags []string
+		for _, t := range vd.SceneParts.Tags {
+			tags = append(tags, t.Name)
+		}
+
 		matchedConfigs := GetMatchedConfigs(tags)
 		var mergedConfig Config
 		mergedConfig.GlobalFlags = make([]GlobalFlagDef, 0)
@@ -156,6 +165,8 @@ func (s *Session) appendEvent(ev SessionEvent) {
 }
 
 func RecordPlayStart(sceneId, label string, videoTimeSec float64, fileDuration float64) {
+	label = getLabelOrDefault(label)
+
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -196,6 +207,8 @@ func RecordPlayStart(sceneId, label string, videoTimeSec float64, fileDuration f
 }
 
 func RecordPlayStop(sceneId, label string, videoTimeSec float64) {
+	label = getLabelOrDefault(label)
+
 	mu.Lock()
 	defer mu.Unlock()
 	if s, ok := activeSessions[sceneId]; ok {
@@ -240,10 +253,7 @@ func AddUINote(sceneId, noteName, configName, action string) int {
 		return 0
 	}
 
-	label := s.CurrentFileLabel
-	if label == "" {
-		label = "Main"
-	}
+	label := getLabelOrDefault(s.CurrentFileLabel)
 
 	vidTime := s.LastPlayVideoTime
 	now := time.Now()
@@ -579,6 +589,12 @@ func printCategory(b *strings.Builder, summary map[string]map[string][]string, s
 }
 
 // Utils
+func getLabelOrDefault(label string) string {
+	if label == "" {
+		return "Main"
+	}
+	return label
+}
 func mergeIntervals(intervals []TimeInterval) []TimeInterval {
 	if len(intervals) == 0 {
 		return nil
