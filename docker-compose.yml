@@ -15,8 +15,6 @@ services:
       ## For configurations in status page to persist a path must be provided that Stash-VR has write access to.
       #CONFIG_PATH: /config
 
-      ENABLE_PARTS_EXPANSION: "false"
-
       #FAVORITE_TAG: "FAVORITE"
       #EXCLUDE_SORT_NAME: "hidden"
       #HEATMAP_HEIGHT_PX: 45
@@ -26,3 +24,4 @@ services:
       #LOG_LEVEL: "debug"
       #DISABLE_LOG_COLOR: "true"
       #DISABLE_REDACT=true
+      ENABLE_PARTS_EXPANSION: "false"

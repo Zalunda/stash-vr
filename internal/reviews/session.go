@@ -99,7 +99,7 @@ func getSafeTitle(title string) string {
 }
 
 func EnsureSession(vd *library.VideoData) {
-	sceneId := vd.Id()
+	sceneId := vd.SceneId()
 	title := vd.Title()
 
 	mu.Lock()

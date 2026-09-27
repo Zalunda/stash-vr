@@ -7,10 +7,9 @@ import (
 	"stash-vr/internal/api/internal"
 	"stash-vr/internal/config"
 	"stash-vr/internal/library"
+	"stash-vr/internal/multipart"
 	"stash-vr/internal/stash"
-	"stash-vr/internal/stash/gql"
 	"stash-vr/internal/util"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -66,45 +65,25 @@ type subtitleDto struct {
 	Url      string `json:"url,omitempty"`
 }
 
-func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, label string, fileId string) (*videoDataDto, error) {
-	videoId := vd.Id()
+func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, item multipart.PlaybackItem) (*videoDataDto, error) {
 	if len(vd.SceneParts.Files) == 0 {
-		return nil, fmt.Errorf("scene %s has no files", videoId)
+		return nil, fmt.Errorf("scene %s has no files", vd.SceneId())
 	}
-
-	// 1. Append the label to the title
-	title := vd.Title()
-	if label != "" && len(vd.SceneParts.Files) > 1 {
-		title = title + " [" + label + "]"
-	}
-
-	// Locate the specific file so we can read its exact duration and resolution
-	var targetFile *gql.ScenePartsFilesVideoFile = vd.SceneParts.Files[0]
-	if fileId != "" {
-		for _, f := range vd.SceneParts.Files {
-			if f.Id == fileId {
-				targetFile = f
-				break
-			}
-		}
-	}
-
-	durationMs := targetFile.Duration * 1000
 
 	dto := videoDataDto{
 		Access:        1,
-		Title:         title,
+		Title:         multipart.FormatTitle(vd.Title(), item.Label),
 		DateAdded:     vd.SceneParts.Created_at.Format(time.DateOnly),
-		Duration:      durationMs,
+		Duration:      item.File.Duration * 1000,
 		WriteFavorite: util.Ptr(true),
 		WriteRating:   util.Ptr(true),
 		WriteTags:     util.Ptr(true),
-		EventServer:   util.Ptr(getEventsUrl(baseUrl, library.MakeVirtualId(videoId, fileId))),
+		EventServer:   util.Ptr(getEventsUrl(baseUrl, item.VideoId)),
 	}
 
 	if vd.SceneParts.Paths.Screenshot != nil {
 		if vd.SceneParts.Interactive && vd.SceneParts.Paths.Interactive_heatmap != nil {
-			dto.ThumbnailImage = util.Ptr(heatmap.GetCoverUrl(baseUrl, videoId))
+			dto.ThumbnailImage = util.Ptr(heatmap.GetCoverUrl(baseUrl, vd.SceneId()))
 		} else {
 			dto.ThumbnailImage = util.Ptr(stash.ApiKeyed(*vd.SceneParts.Paths.Screenshot))
 		}
@@ -134,17 +113,17 @@ func buildVideoData(ctx context.Context, vd *library.VideoData, baseUrl string, 
 		dto.IsFavorite = util.Ptr(true)
 	}
 
-	setMediaSources(vd, &dto, fileId)
+	setMediaSources(vd, &dto, item.FileId)
 	set3DFormat(vd, &dto)
 	setScripts(vd, &dto)
 	setSubtitles(vd, &dto)
 
-	dto.Tags = getTags(vd, targetFile)
+	dto.Tags = getTags(vd, item.File)
 
 	log.Ctx(ctx).Debug().
 		Str("thumbImage", *dto.ThumbnailImage).
 		Str("thumbVideo", *dto.ThumbnailVideo).
-		Str("codec", targetFile.Video_codec).
+		Str("codec", item.File.Video_codec).
 		Interface("media", dto.Media).Send()
 
 	return &dto, nil
@@ -232,14 +211,8 @@ func setMediaSources(vd *library.VideoData, dto *videoDataDto, fileId string) {
 		}
 		for _, s := range stream.Sources {
 			uniqueUrl := s.Url
-
-			// Inject dummy parameter to isolate HereSphere's local cache per part
 			if fileId != "" {
-				if strings.Contains(uniqueUrl, "?") {
-					uniqueUrl += "&fileId=" + fileId
-				} else {
-					uniqueUrl += "?fileId=" + fileId
-				}
+				uniqueUrl = multipart.AppendQueryParam(uniqueUrl, "fileId", fileId)
 			}
 
 			vs := sourceDto{

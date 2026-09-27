@@ -1,13 +1,13 @@
 package deovr
 
 import (
+	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 	"net/http"
 	"stash-vr/internal/api/internal"
 	"stash-vr/internal/library"
+	"stash-vr/internal/multipart"
 	"stash-vr/internal/reviews"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 )
 
 type httpHandler struct {
@@ -48,16 +48,11 @@ func (h httpHandler) indexHandler(w http.ResponseWriter, req *http.Request) {
 
 func (h httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
-	virtualVideoId := chi.URLParam(req, "videoId")
+	videoId := chi.URLParam(req, "videoId")
+	sceneId, fileId := multipart.ParseVideoId(videoId)
 	baseUrl := internal.GetBaseUrl(req)
 
-	realId, targetFileId := library.ParseVirtualId(virtualVideoId)
-
-	if targetFileId == "" {
-		targetFileId = req.URL.Query().Get("fileId")
-	}
-
-	vd, err := h.LibraryService.GetScene(ctx, realId, false)
+	vd, err := h.LibraryService.GetScene(ctx, sceneId, false)
 	if err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("failed to get scene data")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -66,9 +61,9 @@ func (h httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request) 
 
 	reviews.EnsureSession(vd)
 
-	label := vd.GetFileLabels()[targetFileId]
+	activeItem := multipart.TargetItem(sceneId, vd.SceneParts.Files, fileId)
 
-	dto, err := buildVideoData(vd, baseUrl, label, targetFileId)
+	dto, err := buildVideoData(vd, baseUrl, activeItem)
 	if err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("failed to build video data")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -82,11 +77,9 @@ func (h httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request) 
 	}
 }
 
-// playHandler intercepts the actual play request, swaps the primary file, then redirects to the real stream
 func (h httpHandler) playHandler(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
-	realId := chi.URLParam(req, "videoId")
-	targetFileId := req.URL.Query().Get("fileId")
+	videoId := chi.URLParam(req, "videoId")
 	targetUrl := req.URL.Query().Get("url")
 
 	if targetUrl == "" {
@@ -94,20 +87,15 @@ func (h httpHandler) playHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if targetFileId != "" {
-		vd, err := h.LibraryService.GetScene(ctx, realId, false)
-		if err == nil && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
-			log.Ctx(ctx).Info().Str("scene", realId).Str("file", targetFileId).Msg("Switching Primary File for Multi-part Scene")
+	sceneId, fileId := multipart.ParseVideoId(videoId)
 
-			if err := h.LibraryService.SetPrimaryFile(ctx, realId, targetFileId); err != nil {
-				log.Ctx(ctx).Warn().Err(err).Msg("Failed to switch primary file")
-			} else {
-				// Refetch scene so cache is updated for the future
-				_, _ = h.LibraryService.GetScene(ctx, realId, true)
-			}
+	if vd, err := h.LibraryService.GetScene(ctx, sceneId, false); err == nil {
+		// If the target file isn't the primary one, update it in Stash
+		if fileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != fileId {
+			log.Ctx(ctx).Info().Str("scene", sceneId).Str("file", fileId).Msg("Switching Primary File for Multi-part Scene")
+			_ = h.LibraryService.SetPrimaryFile(ctx, sceneId, fileId)
 		}
 	}
 
-	// Tell the VR Player to go load the actual video stream
 	http.Redirect(w, req, targetUrl, http.StatusFound)
 }

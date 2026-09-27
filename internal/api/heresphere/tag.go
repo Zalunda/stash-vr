@@ -82,18 +82,17 @@ func addMultiTracks(target *[]tagDto, tags []tagDto, startTrack int) int {
 }
 
 func getTags(vd *library.VideoData, file *gql.ScenePartsFilesVideoFile) []tagDto {
-	// Multiply by 1000 for HereSphere (milliseconds) using the SPECIFIC file's duration
-	durationMs := file.Duration * 1000
+	duration := file.Duration * 1000
 
 	var tags []tagDto
 
 	trackIndex := addTrack(&tags, getMarkers(vd), 0)
 
 	if summary := getSummary(vd, false); summary != "" {
-		trackIndex = addSplitTrack(&tags, []tagDto{{Name: internal.LegendSummary + seperator + summary}}, trackIndex, durationMs)
+		trackIndex = addSplitTrack(&tags, []tagDto{{Name: internal.LegendSummary + seperator + summary}}, trackIndex, duration)
 	}
 
-	trackIndex = addSplitTrack(&tags, getFields(vd, file), trackIndex, durationMs)
+	trackIndex = addSplitTrack(&tags, getFields(vd, file), trackIndex, duration)
 	trackIndex = addMultiTracks(&tags, getStashTags(vd), trackIndex)
 	trackIndex = addMultiTracks(&tags, getStudio(vd), trackIndex)
 	trackIndex = addMultiTracks(&tags, getPerformers(vd), trackIndex)

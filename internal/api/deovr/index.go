@@ -1,9 +1,8 @@
 package deovr
 
 import (
-	"fmt"
-	"hash/fnv"
 	"stash-vr/internal/library"
+	"stash-vr/internal/multipart"
 	"stash-vr/internal/stash"
 	"stash-vr/internal/util"
 )
@@ -26,43 +25,21 @@ type previewDataDto struct {
 	VideoUrl     string  `json:"video_url"`
 }
 
-func safeHashVirtualId(sceneId string, fileId string) string {
-	h := fnv.New32a()
-	if fileId == "" {
-		h.Write([]byte(sceneId))
-	} else {
-		h.Write([]byte(sceneId + "_" + fileId))
-	}
-	return fmt.Sprintf("%d", h.Sum32()&0x7FFFFFFF)
-}
-
 func buildIndex(sections []library.Section, vds map[string]*library.VideoData, baseUrl string) (indexDto, error) {
 	index := indexDto{Authorized: "1", Scenes: make([]sceneDto, 0, len(sections))}
 
 	for _, section := range sections {
-		s := sceneDto{
-			Name: section.Name,
-			List: make([]previewDataDto, 0),
-		}
+		s := sceneDto{Name: section.Name, List: make([]previewDataDto, 0)}
 
 		for _, sceneId := range section.Ids {
 			if vd, ok := vds[sceneId]; ok {
-
-				// GetPlaybackItems handles the config toggle automatically
-				for _, item := range vd.GetPlaybackItems() {
-					title := vd.Title()
-					if item.Label != "" {
-						title = title + " [" + item.Label + "]"
-					}
-
-					videoUrl := getVideoDataUrl(baseUrl, sceneId)
-					if item.FileId != "" {
-						videoUrl += "?fileId=" + item.FileId
-					}
+				for _, item := range multipart.GetPlaybackItems(sceneId, vd.SceneParts.Files) {
+					videoUrl := getVideoDataUrl(baseUrl, item.VideoId)
+					videoUrl = multipart.AppendQueryParam(videoUrl, "fileId", item.FileId)
 
 					previewData := previewDataDto{
-						Id:          safeHashVirtualId(sceneId, item.FileId),
-						Title:       title,
+						Id:          multipart.HashVideoId(item.VideoId),
+						Title:       multipart.FormatTitle(vd.Title(), item.Label),
 						VideoLength: int(item.File.Duration),
 						VideoUrl:    videoUrl,
 					}
