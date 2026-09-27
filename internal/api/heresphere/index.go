@@ -2,6 +2,7 @@ package heresphere
 
 import (
 	"stash-vr/internal/library"
+	"stash-vr/internal/multipart"
 )
 
 type indexDto struct {
@@ -25,13 +26,13 @@ func buildIndex(sections []library.Section, vds map[string]*library.VideoData, b
 
 		for _, sceneId := range section.Ids {
 			if vd, ok := vds[sceneId]; ok {
-				for _, item := range vd.GetPlaybackItems() {
-					vid := library.MakeVirtualId(sceneId, item.FileId)
-					l.List = append(l.List, getVideoDataUrl(baseUrl, vid))
+				for _, item := range multipart.GetPlaybackItems(sceneId, vd.SceneParts.Files) {
+					l.List = append(l.List, getVideoDataUrl(baseUrl, item.VideoId))
 				}
 			}
 		}
 		index.Library = append(index.Library, l)
 	}
+
 	return index, nil
 }

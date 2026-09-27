@@ -3,16 +3,16 @@ package heresphere
 import (
 	"context"
 	"fmt"
+	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 	"net/http"
 	"net/url"
 	"stash-vr/internal/api/internal"
 	"stash-vr/internal/library"
+	"stash-vr/internal/multipart"
 	"stash-vr/internal/stash"
 	"stash-vr/internal/util"
 	"strings"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 )
 
 type httpHandler struct {
@@ -83,73 +83,54 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 
 	ctx := req.Context()
 	baseUrl := internal.GetBaseUrl(req)
-
-	virtualVideoId, err := url.QueryUnescape(chi.URLParam(req, "videoId"))
+	videoId, err := url.QueryUnescape(chi.URLParam(req, "videoId"))
 	if err != nil {
 		log.Ctx(ctx).Warn().Err(err).Msg("malformed videoId")
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// 1. Extract Real Scene ID and Target File ID
-	realId, targetFileId := library.ParseVirtualId(virtualVideoId)
+	sceneId, fileId := multipart.ParseVideoId(videoId)
 
-	// 2. Parse the request body early to check HereSphere's intent
-	var vdReq videoDataRequestDto
-	var hasReqBody bool
-	if reqBody, err := internal.UnmarshalBody[videoDataRequestDto](req); err == nil {
-		vdReq = reqBody
-		hasReqBody = true
+	vdReq, reqErr := internal.UnmarshalBody[videoDataRequestDto](req)
+	if reqErr != nil {
+		log.Ctx(ctx).Warn().Err(reqErr).Msg("Failed to parse request body")
+	} else {
+		if vdReq.DeleteFile != nil && *vdReq.DeleteFile {
+			if err = h.libraryService.Delete(ctx, sceneId); err != nil {
+				log.Ctx(ctx).Warn().Err(err).Msg("Failed to delete scene")
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+			return
+		}
+
+		go h.processUpdates(sceneId, vdReq)
 	}
 
-	// HereSphere sets NeedsMediaSource to true ONLY when the user clicks play.
-	// If it's just fetching thumbnails for the grid, this will be false/nil.
-	isPlayRequest := hasReqBody && vdReq.NeedsMediaSource != nil && *vdReq.NeedsMediaSource
-
-	// 2. Fetch the scene as it is right now
-	vd, err := h.libraryService.GetScene(ctx, realId, false)
+	vd, err := h.libraryService.GetScene(ctx, sceneId, false)
 	if err != nil {
+		log.Ctx(ctx).Error().Err(err).Msg("failed to get scene data")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	// 3. Find the label for the requested file
-	label := vd.GetFileLabels()[targetFileId]
-
-	// 5. Change the primary file in the DB ONLY if the user actually clicked play!
-	if isPlayRequest && targetFileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != targetFileId {
-		log.Ctx(ctx).Info().Str("scene", realId).Str("file", targetFileId).Msg("Switching Primary File for Multi-part Scene")
-
-		if err := h.libraryService.SetPrimaryFile(ctx, realId, targetFileId); err != nil {
-			log.Ctx(ctx).Warn().Err(err).Msg("Failed to switch primary file")
-		} else {
-			// Refetch scene so Paths point to the new primary file
-			vd, err = h.libraryService.GetScene(ctx, realId, true)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
+	if reqErr == nil && vdReq.NeedsMediaSource != nil && *vdReq.NeedsMediaSource {
+		if fileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != fileId {
+			log.Ctx(ctx).Info().Str("scene", sceneId).Str("file", fileId).Msg("Switching Primary File for Multi-part Scene")
+			if err := h.libraryService.SetPrimaryFile(ctx, sceneId, fileId); err == nil {
+				vd, _ = h.libraryService.GetScene(ctx, sceneId, true) // Force refetch
 			}
 		}
 	}
 
-	// 5. Handle ratings/favorites updates
-	if vdReq, err := internal.UnmarshalBody[videoDataRequestDto](req); err == nil {
-		if vdReq.DeleteFile != nil && *vdReq.DeleteFile {
-			h.libraryService.Delete(ctx, realId)
-			return
-		}
-		go h.processUpdates(realId, vdReq)
-	}
+	activeItem := multipart.TargetItem(sceneId, vd.SceneParts.Files, fileId)
 
-	// 6. Build the video data and pass the label AND targetFileId!
-	dto, err := buildVideoData(ctx, vd, baseUrl, label, targetFileId)
+	dto, err := buildVideoData(ctx, vd, baseUrl, activeItem)
 	if err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("failed to build video data")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	dto.EventServer = util.Ptr(getEventsUrl(baseUrl, virtualVideoId))
 
 	if err := internal.WriteJson(ctx, w, dto); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("write")
@@ -295,12 +276,10 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	parts := strings.Split(ev.Id, "/")
-	virtualVideoId := parts[len(parts)-1]
+	videoId := parts[len(parts)-1]
+	sceneId, fileId := multipart.ParseVideoId(videoId)
 
-	// Decouple virtual ID into real Scene ID and File ID
-	realId, fileId := library.ParseVirtualId(virtualVideoId)
-
-	vd, err := h.libraryService.GetScene(ctx, realId, false)
+	vd, err := h.libraryService.GetScene(ctx, fileId, false)
 	if err != nil {
 		log.Ctx(ctx).Warn().Err(err).Msg("Failed to get scene from event")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -313,8 +292,7 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 	case evPlay:
 		if h.ps == nil {
 			h.ps = newPlayback(vd, fileId)
-		} else if h.ps.sceneId != realId || h.ps.fileId != fileId {
-			// Trigger stop if they switch to a different scene OR a different part of the same scene
+		} else if h.ps.sceneId != sceneId || h.ps.fileId != fileId {
 			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
 			h.ps = newPlayback(vd, fileId)
 		} else {

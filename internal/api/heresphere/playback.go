@@ -3,28 +3,19 @@ package heresphere
 import (
 	"context"
 	"stash-vr/internal/library"
+	"stash-vr/internal/multipart"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
 func newPlayback(vd *library.VideoData, fileId string) *playbackState {
-	duration := vd.SceneParts.Files[0].Duration
-
-	// If a specific file is playing, use its specific duration
-	if fileId != "" {
-		for _, f := range vd.SceneParts.Files {
-			if f.Id == fileId {
-				duration = f.Duration
-				break
-			}
-		}
-	}
+	targetItem := multipart.TargetItem(vd.SceneId(), vd.SceneParts.Files, fileId)
 
 	return &playbackState{
-		sceneId:       vd.Id(),
+		sceneId:       vd.SceneId(),
 		fileId:        fileId,
-		videoDuration: duration,
+		videoDuration: targetItem.File.Duration,
 		lastPlayTime:  time.Now(),
 		isPlaying:     true,
 	}

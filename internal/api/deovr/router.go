@@ -1,15 +1,14 @@
 package deovr
 
 import (
+	"github.com/go-chi/chi/v5"
 	"net/http"
 	"stash-vr/internal/api/internal"
 	"stash-vr/internal/library"
-
-	"github.com/go-chi/chi/v5"
 )
 
 func Router(libraryService *library.Service) http.Handler {
-	httpHandler := httpHandler{LibraryService: libraryService}
+	httpHandler := httpHandler{libraryService}
 	r := chi.NewRouter()
 
 	r.Get("/", internal.LogRoute("index", httpHandler.indexHandler))
