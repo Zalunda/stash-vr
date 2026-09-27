@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"stash-vr/internal/api/internal"
 	"stash-vr/internal/library"
+	"stash-vr/internal/reviews"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -62,6 +63,8 @@ func (h httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request) 
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	reviews.EnsureSession(vd)
 
 	label := vd.GetFileLabels()[targetFileId]
 

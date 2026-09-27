@@ -62,6 +62,10 @@ func LoadConfigs() {
 	}
 }
 
+func HasConfigs() bool {
+	return len(activeConfigs) > 0
+}
+
 // GetMatchedConfigs finds the matching root configs and dynamically resolves their imports
 func GetMatchedConfigs(sceneTags []string) []Config {
 	var roots []Config

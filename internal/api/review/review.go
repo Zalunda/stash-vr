@@ -29,30 +29,22 @@ func (h *handler) contextHandler(w http.ResponseWriter, r *http.Request) {
 	if sceneId == "" {
 		sceneId = reviews.GetLastActiveSceneId()
 	}
-	if sceneId == "" {
-		http.Error(w, "No active scene. Please play a video first.", http.StatusBadRequest)
-		return
+
+	var session *reviews.Session
+	var ok bool
+
+	if sceneId != "" {
+		session, ok = reviews.GetSession(sceneId)
 	}
 
-	session, ok := reviews.GetSession(sceneId)
+	// If we still don't have a valid session, tell the user why.
 	if !ok {
-		vd, err := h.lib.GetScene(r.Context(), sceneId, false)
-		if err != nil {
-			http.Error(w, "Scene not found in library", http.StatusNotFound)
-			return
+		if !reviews.HasConfigs() {
+			http.Error(w, "The Review feature is not configured. Please create a .review.json configuration file in the 'config' folder.", http.StatusNotImplemented)
+		} else {
+			http.Error(w, "Waiting for scene... Please play a video in your VR player that has tags matching your review triggers.", http.StatusNotFound)
 		}
-
-		var tags []string
-		for _, t := range vd.SceneParts.Tags {
-			tags = append(tags, t.Name)
-		}
-
-		reviews.EnsureSession(sceneId, vd.Title(), tags)
-		session, ok = reviews.GetSession(sceneId)
-		if !ok {
-			http.Error(w, "Failed to initialize session", http.StatusInternalServerError)
-			return
-		}
+		return
 	}
 
 	state := session.Derive()
@@ -177,13 +169,16 @@ const htmlUI = `
         }
 
         fetch('/review/context?sceneId=' + activeSceneId)
-            .then(r => {
-                if (!r.ok) throw new Error("Status " + r.status);
-                return r.json();
-            })
-            .then(data => {
-                activeSceneId = data.sceneId;
-                document.getElementById('sceneTitle').innerText = data.sceneTitle || "Unknown Scene";
+				.then(async r => {
+					if (!r.ok) {
+						const msg = await r.text();
+						throw new Error(msg || "Status " + r.status);
+					}
+					return r.json();
+				})
+				.then(data => {
+					activeSceneId = data.sceneId;
+					document.getElementById('sceneTitle').innerText = data.sceneTitle || "Unknown Scene";
 
                 // 1. Calculate Occurrences Badge
                 const counts = {};
@@ -255,8 +250,10 @@ const htmlUI = `
                 }
             })
             .catch(err => {
-                document.getElementById('sceneTitle').innerHTML = '<span class="error">Failed to load scene context. (' + err.message + ')</span>';
-            });
+					// Clean up the error message output
+					const errorMsg = err.message.replace('Error: ', '');
+					document.getElementById('sceneTitle').innerHTML = '<span class="error">' + errorMsg + '</span>';
+				});
 
         function addNote(name, config, action, btnElement) {
             const formData = new FormData();
