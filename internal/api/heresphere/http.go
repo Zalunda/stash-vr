@@ -3,8 +3,6 @@ package heresphere
 import (
 	"context"
 	"fmt"
-	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"net/url"
 	"stash-vr/internal/api/internal"
@@ -14,6 +12,9 @@ import (
 	"stash-vr/internal/stash"
 	"stash-vr/internal/util"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 )
 
 type httpHandler struct {
@@ -282,7 +283,7 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 	videoId := parts[len(parts)-1]
 	sceneId, fileId := multipart.ParseVideoId(videoId)
 
-	vd, err := h.libraryService.GetScene(ctx, fileId, false)
+	vd, err := h.libraryService.GetScene(ctx, sceneId, false)
 	if err != nil {
 		log.Ctx(ctx).Warn().Err(err).Msg("Failed to get scene from event")
 		w.WriteHeader(http.StatusInternalServerError)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 type TimelineNoteDef struct {
@@ -50,7 +51,6 @@ func init() {
 func LoadConfigs() {
 	files, _ := filepath.Glob(filepath.Join("config", "*.review.json"))
 
-	// 1. Load all configurations
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err == nil {
@@ -78,7 +78,7 @@ func GetMatchedConfigs(sceneTags []string) []Config {
 		for _, t := range c.TriggerTags {
 			if t == "*" {
 				isFallback = true
-			} else if contains(sceneTags, t) {
+			} else if slices.Contains(sceneTags, t) {
 				isSpecificMatch = true
 			}
 		}
@@ -163,15 +163,6 @@ func GetNoteDetails(visualNoteName string) (configId string, sentiment string) {
 		}
 	}
 	return "Review", "General"
-}
-
-func contains(slice []string, val string) bool {
-	for _, item := range slice {
-		if item == val {
-			return true
-		}
-	}
-	return false
 }
 
 func removeDuplicateGlobalFlags(elements []GlobalFlagDef) []GlobalFlagDef {

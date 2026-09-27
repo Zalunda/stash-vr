@@ -1,6 +1,7 @@
 package reviews
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -43,7 +46,7 @@ type SessionEvent struct {
 
 	// Play Events
 	FileLabel string  `json:"fileLabel,omitempty"`
-	VideoTime float64 `json:"videoTime,omitempty"` // In Seconds
+	VideoTime float64 `json:"videoTime,omitempty"`
 
 	// Note Events
 	NoteName   string   `json:"noteName,omitempty"`
@@ -64,26 +67,50 @@ type DerivedState struct {
 }
 
 type Session struct {
+	mu            sync.Mutex
 	SceneId       string
 	SceneTitle    string
 	SafeTitle     string
 	MatchedConfig Config
-	VisualNotes   []VisualNoteDef // Cached for the UI
+	VisualNotes   []VisualNoteDef
 	FileDurations map[string]float64
 	Events        []SessionEvent
 
-	// Playback State for detecting Seek gaps
 	IsPlaying         bool
 	LastPlayRealTime  time.Time
 	LastPlayVideoTime float64
-	CurrentFileLabel  string // Tracks active file part
+	CurrentFileLabel  string
+
+	saveCh chan struct{}
 }
 
 var (
-	mu                sync.Mutex
+	globalMu          sync.Mutex
 	activeSessions    = make(map[string]*Session)
-	lastActiveSceneId string // Track the most recently active scene
+	lastActiveSceneId string
 )
+
+func init() {
+	// Background garbage collector to prevent memory leaks from abandoned sessions
+	go func() {
+		for {
+			time.Sleep(15 * time.Minute)
+			now := time.Now()
+
+			globalMu.Lock()
+			for id, s := range activeSessions {
+				s.mu.Lock()
+				// If not playing, and haven't touched it in 2 hours, drop it from RAM.
+				if !s.IsPlaying && now.Sub(s.LastPlayRealTime) > 2*time.Hour {
+					close(s.saveCh)
+					delete(activeSessions, id)
+				}
+				s.mu.Unlock()
+			}
+			globalMu.Unlock()
+		}
+	}()
+}
 
 func getSafeTitle(title string) string {
 	safe := strings.Map(func(r rune) rune {
@@ -102,8 +129,8 @@ func EnsureSession(vd *library.VideoData) {
 	sceneId := vd.SceneId()
 	title := vd.Title()
 
-	mu.Lock()
-	defer mu.Unlock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 
 	lastActiveSceneId = sceneId
 
@@ -130,6 +157,7 @@ func EnsureSession(vd *library.VideoData) {
 			MatchedConfig: mergedConfig,
 			VisualNotes:   GetVisualNotes(tags),
 			FileDurations: make(map[string]float64),
+			saveCh:        make(chan struct{}, 1),
 		}
 
 		rawPath := filepath.Join("review-notes", safeTitle+".raw.json")
@@ -138,120 +166,172 @@ func EnsureSession(vd *library.VideoData) {
 		}
 
 		activeSessions[sceneId] = s
+
+		// Start async save worker
+		go s.saveWorker()
 	}
 }
 
 func GetSession(sceneId string) (*Session, bool) {
-	mu.Lock()
-	defer mu.Unlock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	s, ok := activeSessions[sceneId]
 	return s, ok
 }
 
 func GetLastActiveSceneId() string {
-	mu.Lock()
-	defer mu.Unlock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	return lastActiveSceneId
+}
+
+// --- ASYNC SAVING ---
+
+func (s *Session) saveWorker() {
+	for range s.saveCh {
+		s.mu.Lock()
+		state := s.deriveInternal()
+
+		eventsCopy := make([]SessionEvent, len(s.Events))
+		copy(eventsCopy, s.Events)
+
+		safeTitle := s.SafeTitle
+		sceneTitle := s.SceneTitle
+		s.mu.Unlock()
+
+		// Disk I/O performed outside of the Session lock!
+		rawPath := filepath.Join("review-notes", safeTitle+".raw.json")
+		b, err := json.MarshalIndent(eventsCopy, "", "  ")
+		if err != nil {
+			log.Ctx(context.Background()).Warn().Err(err).Msg("failed to marshal events")
+		} else if err := os.WriteFile(rawPath, b, 0644); err != nil {
+			log.Ctx(context.Background()).Warn().Err(err).Msg("failed to write raw events file")
+		}
+
+		saveDerivedStateToFile(state, safeTitle, sceneTitle)
+	}
+}
+
+// triggers an async write if one isn't already queued. Must be called inside s.mu.Lock()
+func (s *Session) triggerSave() {
+	select {
+	case s.saveCh <- struct{}{}:
+	default: // already queued
+	}
 }
 
 // --- EVENT RECORDERS ---
 
+// Note: Ensure s.mu.Lock() is held before calling this.
 func (s *Session) appendEvent(ev SessionEvent) {
 	s.Events = append(s.Events, ev)
-	rawPath := filepath.Join("review-notes", s.SafeTitle+".raw.json")
-	b, _ := json.MarshalIndent(s.Events, "", "  ")
-	os.WriteFile(rawPath, b, 0644)
-	s.SaveToFile()
+	s.triggerSave()
 }
 
 func RecordPlayStart(sceneId, label string, videoTimeSec float64, fileDuration float64) {
 	label = getLabelOrDefault(label)
 
-	mu.Lock()
-	defer mu.Unlock()
-
+	globalMu.Lock()
 	lastActiveSceneId = sceneId
+	s, ok := activeSessions[sceneId]
+	globalMu.Unlock()
 
-	if s, ok := activeSessions[sceneId]; ok {
-		now := time.Now()
-		s.CurrentFileLabel = label
-		s.FileDurations[label] = fileDuration
-
-		if s.IsPlaying {
-			elapsed := now.Sub(s.LastPlayRealTime).Seconds()
-			expectedVideoTime := s.LastPlayVideoTime + elapsed
-
-			// If the newly reported time is off by more than 2 seconds, it's a seek!
-			if math.Abs(videoTimeSec-expectedVideoTime) > 2.0 {
-				if dur, ok := s.FileDurations[label]; ok && expectedVideoTime > dur {
-					expectedVideoTime = dur
-				}
-				// INJECT the missing PlayStop!
-				s.appendEvent(SessionEvent{
-					Timestamp: now, Type: EventPlayStop, FileLabel: label,
-					VideoTime: expectedVideoTime, Injected: true, // Tagged here!
-				})
-			} else {
-				// Duplicate play event at roughly the same time, just update trackers and ignore.
-				s.LastPlayRealTime = now
-				s.LastPlayVideoTime = videoTimeSec
-				return
-			}
-		}
-
-		s.IsPlaying = true
-		s.LastPlayRealTime = now
-		s.LastPlayVideoTime = videoTimeSec
-		s.appendEvent(SessionEvent{Timestamp: now, Type: EventPlayStart, FileLabel: label, VideoTime: videoTimeSec})
+	if !ok {
+		return
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	s.CurrentFileLabel = label
+	s.FileDurations[label] = fileDuration
+
+	if s.IsPlaying {
+		elapsed := now.Sub(s.LastPlayRealTime).Seconds()
+		expectedVideoTime := s.LastPlayVideoTime + elapsed
+
+		// If the newly reported time is off by more than 2 seconds, it's a seek.
+		if math.Abs(videoTimeSec-expectedVideoTime) > 2.0 {
+			if dur, ok := s.FileDurations[label]; ok && expectedVideoTime > dur {
+				expectedVideoTime = dur
+			}
+			// INJECT the missing PlayStop.
+			s.appendEvent(SessionEvent{
+				Timestamp: now, Type: EventPlayStop, FileLabel: label,
+				VideoTime: expectedVideoTime, Injected: true,
+			})
+		} else {
+			// Duplicate play event at roughly the same time, just update trackers and ignore.
+			s.LastPlayRealTime = now
+			s.LastPlayVideoTime = videoTimeSec
+			return
+		}
+	}
+
+	s.IsPlaying = true
+	s.LastPlayRealTime = now
+	s.LastPlayVideoTime = videoTimeSec
+	s.appendEvent(SessionEvent{Timestamp: now, Type: EventPlayStart, FileLabel: label, VideoTime: videoTimeSec})
 }
 
 func RecordPlayStop(sceneId, label string, videoTimeSec float64) {
 	label = getLabelOrDefault(label)
 
-	mu.Lock()
-	defer mu.Unlock()
-	if s, ok := activeSessions[sceneId]; ok {
-		now := time.Now()
+	globalMu.Lock()
+	s, ok := activeSessions[sceneId]
+	globalMu.Unlock()
 
-		if s.IsPlaying {
-			elapsed := now.Sub(s.LastPlayRealTime).Seconds()
-			expectedVideoTime := s.LastPlayVideoTime + elapsed
-
-			// HereSphere sends ~0 on Close/Stop.
-			// If the reported time deviates significantly from reality, trust our math!
-			if math.Abs(videoTimeSec-expectedVideoTime) > 2.0 {
-				videoTimeSec = expectedVideoTime
-			}
-
-			// Cap to duration just in case
-			if dur, ok := s.FileDurations[label]; ok && videoTimeSec > dur {
-				videoTimeSec = dur
-			}
-		}
-
-		s.appendEvent(SessionEvent{Timestamp: now, Type: EventPlayStop, FileLabel: label, VideoTime: videoTimeSec})
-		s.IsPlaying = false
+	if !ok {
+		return
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	if s.IsPlaying {
+		elapsed := now.Sub(s.LastPlayRealTime).Seconds()
+		expectedVideoTime := s.LastPlayVideoTime + elapsed
+
+		if math.Abs(videoTimeSec-expectedVideoTime) > 2.0 {
+			videoTimeSec = expectedVideoTime
+		}
+		if dur, ok := s.FileDurations[label]; ok && videoTimeSec > dur {
+			videoTimeSec = dur
+		}
+	}
+
+	s.appendEvent(SessionEvent{Timestamp: now, Type: EventPlayStop, FileLabel: label, VideoTime: videoTimeSec})
+	s.IsPlaying = false
 }
 
 func RecordFlagsSync(sceneId string, flags map[string][]string) {
-	mu.Lock()
-	defer mu.Unlock()
-	if s, ok := activeSessions[sceneId]; ok {
-		s.appendEvent(SessionEvent{Timestamp: time.Now(), Type: EventFlagsSync, Flags: flags})
+	globalMu.Lock()
+	s, ok := activeSessions[sceneId]
+	globalMu.Unlock()
+
+	if !ok {
+		return
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.appendEvent(SessionEvent{Timestamp: time.Now(), Type: EventFlagsSync, Flags: flags})
 }
 
-// Injects a note exactly at the tracked video playback time and returns the updated count
-func AddUINote(sceneId, noteName, configName, action string) int {
-	mu.Lock()
-	defer mu.Unlock()
-
+func AddUINote(sceneId, noteName, configName, action string) (int, bool) {
+	globalMu.Lock()
 	s, ok := activeSessions[sceneId]
+	globalMu.Unlock()
+
 	if !ok {
-		return 0
+		return 0, false
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	label := getLabelOrDefault(s.CurrentFileLabel)
 
@@ -268,9 +348,9 @@ func AddUINote(sceneId, noteName, configName, action string) int {
 	}
 
 	isDuplicate := false
+	success := true
 
 	if action == "start" || action == "point" {
-		// Anti-spam filter: ignore if the exact same note was dropped within 1 second of video time
 		for i := len(s.Events) - 1; i >= 0; i-- {
 			ev := s.Events[i]
 			if ev.Type == EventNoteAdded && ev.FileLabel == label && ev.NoteName == noteName {
@@ -293,32 +373,40 @@ func AddUINote(sceneId, noteName, configName, action string) int {
 			})
 		}
 	} else if action == "end" {
-		// Find latest open note
 		var oldStart *float64
+		var oldEnd *float64
 		for i := len(s.Events) - 1; i >= 0; i-- {
 			ev := s.Events[i]
 			if (ev.Type == EventNoteAdded || ev.Type == EventNoteChanged) && ev.FileLabel == label && ev.NoteName == noteName {
 				oldStart = ev.NewStart
+				oldEnd = ev.NewEnd
 				break
 			}
 		}
+
 		if oldStart != nil {
-			s.appendEvent(SessionEvent{
-				Timestamp:  now,
-				Type:       EventNoteChanged,
-				FileLabel:  label,
-				NoteName:   noteName,
-				ConfigName: configName,
-				OldStart:   oldStart,
-				OldEnd:     nil, // Assume it was previously open
-				NewStart:   oldStart,
-				NewEnd:     &vidTime,
-			})
+			// Ensure the user didn't scrub backwards before closing the note
+			if vidTime < *oldStart {
+				success = false
+			} else {
+				s.appendEvent(SessionEvent{
+					Timestamp:  now,
+					Type:       EventNoteChanged,
+					FileLabel:  label,
+					NoteName:   noteName,
+					ConfigName: configName,
+					OldStart:   oldStart,
+					OldEnd:     oldEnd,
+					NewStart:   oldStart,
+					NewEnd:     &vidTime,
+				})
+			}
+		} else {
+			success = false // Mark as failed if we couldn't find a note to close
 		}
 	}
 
-	// Calculate the actual current count of this note to return to the UI
-	state := s.Derive()
+	state := s.deriveInternal()
 	count := 0
 	for _, notes := range state.TimedNotes {
 		for _, n := range notes {
@@ -327,12 +415,20 @@ func AddUINote(sceneId, noteName, configName, action string) int {
 			}
 		}
 	}
-	return count
+	return count, success
 }
 
 // --- STATE DERIVATION ---
 
+// Public thread-safe method
 func (s *Session) Derive() DerivedState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deriveInternal()
+}
+
+// Internal lock-free method
+func (s *Session) deriveInternal() DerivedState {
 	state := DerivedState{
 		Played:      make(map[string][]TimeInterval),
 		TimedNotes:  make(map[string][]TimedNote),
@@ -401,15 +497,6 @@ func (s *Session) Derive() DerivedState {
 	return state
 }
 
-func GetSessionState(sceneId string) (DerivedState, bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	if s, ok := activeSessions[sceneId]; ok {
-		return s.Derive(), true
-	}
-	return DerivedState{}, false
-}
-
 // --- FILE WRITER ---
 
 func formatTimeSec(sec float64) string {
@@ -429,11 +516,10 @@ func formatDurationSec(sec float64) string {
 	return fmt.Sprintf("%d:%02d", m, s)
 }
 
-func (s *Session) SaveToFile() {
-	state := s.Derive()
+func saveDerivedStateToFile(state DerivedState, safeTitle string, sceneTitle string) {
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("Scene: %s\n\n", s.SceneTitle))
+	b.WriteString(fmt.Sprintf("Scene: %s\n\n", sceneTitle))
 
 	if len(state.Played) > 0 {
 		b.WriteString("Played:\n")
@@ -564,8 +650,10 @@ func (s *Session) SaveToFile() {
 		}
 	}
 
-	path := filepath.Join("review-notes", s.SafeTitle+"-ReviewNote.txt")
-	os.WriteFile(path, []byte(b.String()), 0644)
+	path := filepath.Join("review-notes", safeTitle+"-ReviewNote.txt")
+	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+		log.Ctx(context.Background()).Warn().Err(err).Msg("failed to write txt review file")
+	}
 }
 
 func printCategory(b *strings.Builder, summary map[string]map[string][]string, sentimentKey, title string) {
