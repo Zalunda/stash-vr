@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 type TimelineNoteDef struct {
@@ -41,7 +44,10 @@ type VisualNoteDef struct {
 	ConfigId  string `json:"configId"`
 }
 
-var activeConfigs = make(map[string]Config)
+var (
+	activeConfigsMu sync.RWMutex
+	activeConfigs   = make(map[string]Config)
+)
 
 func init() {
 	os.MkdirAll("config", 0755)
@@ -50,27 +56,53 @@ func init() {
 }
 
 func LoadConfigs() {
-	files, _ := filepath.Glob(filepath.Join("config", "*.review.json"))
+	pattern := filepath.Join("config", "*.review.json")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		log.Error().Err(err).Str("pattern", pattern).Msg("Failed to glob review configs")
+		return
+	}
+
+	newConfigs := make(map[string]Config)
 
 	for _, f := range files {
 		b, err := os.ReadFile(f)
-		if err == nil {
-			var c Config
-			if json.Unmarshal(b, &c) == nil {
-				base := filepath.Base(f)
-				c.FileBaseName = strings.TrimSuffix(base, ".json")
-				activeConfigs[c.Id] = c
-			}
+		if err != nil {
+			log.Error().Err(err).Str("file", f).Msg("Failed to read review config")
+			continue
 		}
+
+		var c Config
+		if err := json.Unmarshal(b, &c); err != nil {
+			log.Error().Err(err).Str("file", f).Msg("Failed to parse/unmarshal review config JSON. Check for syntax errors!")
+			continue
+		}
+
+		base := filepath.Base(f)
+		c.FileBaseName = strings.TrimSuffix(base, ".json")
+		newConfigs[c.Id] = c
+		log.Debug().Str("id", c.Id).Str("file", f).Msg("Loaded review config")
 	}
+
+	// Safely swap the map out in memory
+	activeConfigsMu.Lock()
+	activeConfigs = newConfigs
+	activeConfigsMu.Unlock()
+
+	log.Info().Int("count", len(newConfigs)).Msg("Review configs loaded into memory")
 }
 
 func HasConfigs() bool {
+	activeConfigsMu.RLock()
+	defer activeConfigsMu.RUnlock()
 	return len(activeConfigs) > 0
 }
 
 // GetMatchedConfigs finds the matching root configs and dynamically resolves their imports
 func GetMatchedConfigs(sceneTags []string) []Config {
+	activeConfigsMu.RLock()
+	defer activeConfigsMu.RUnlock()
+
 	var roots []Config
 	var fallbacks []Config
 
@@ -161,6 +193,9 @@ func GetVisualNotes(sceneTags []string) []VisualNoteDef {
 }
 
 func GetNoteDetails(visualNoteName string) (configId string, sentiment string) {
+	activeConfigsMu.RLock()
+	defer activeConfigsMu.RUnlock()
+
 	for _, c := range activeConfigs {
 		for _, n := range c.TimelineNotes {
 			expectedName := fmt.Sprintf("[%s] %s", c.Prefix, n.Label)

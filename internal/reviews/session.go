@@ -128,6 +128,8 @@ func getSafeTitle(title string) string {
 }
 
 func EnsureSession(vd *library.VideoData) {
+	LoadConfigs()
+
 	sceneId := vd.SceneId()
 	title := vd.Title()
 
