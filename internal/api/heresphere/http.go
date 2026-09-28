@@ -116,9 +116,10 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	reviews.EnsureSession(vd)
-
 	if reqErr == nil && vdReq.NeedsMediaSource != nil && *vdReq.NeedsMediaSource {
+		// This guarantees it is ONLY called when the user actually hits "Play"
+		reviews.EnsureSession(vd)
+
 		if fileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != fileId {
 			log.Ctx(ctx).Info().Str("scene", sceneId).Str("file", fileId).Msg("Switching Primary File for Multi-part Scene")
 			if err := h.libraryService.SetPrimaryFile(ctx, sceneId, fileId); err == nil {
