@@ -22,6 +22,7 @@ const (
 	envKeyExcludeSortName        = "EXCLUDE_SORT_NAME"
 	envKeyUserConfigPath         = "CONFIG_PATH"
 	envKeyGenerateSummaryIds     = "GENERATE_SUMMARY_IDS"
+	envKeyReviewNotesPath        = "REVIEW_NOTES_PATH"
 	envKeyAlwaysWriteReviewNotes = "ALWAYS_WRITE_REVIEW_NOTES"
 )
 
@@ -39,6 +40,7 @@ type ApplicationConfig struct {
 	ExcludeSortName        string
 	ConfigPath             string
 	GenerateSummaryIds     bool
+	ReviewNotesPath        string
 	AlwaysWriteReviewNotes bool
 }
 
@@ -84,6 +86,9 @@ func Init() {
 	pflag.String(envKeyGenerateSummaryIds, "", "Generate summary ids for categorized tags")
 	_ = viper.BindPFlag(envKeyGenerateSummaryIds, pflag.Lookup(envKeyGenerateSummaryIds))
 
+	pflag.String(envKeyReviewNotesPath, "", "Path to store review notes")
+	_ = viper.BindPFlag(envKeyReviewNotesPath, pflag.Lookup(envKeyReviewNotesPath))
+
 	pflag.Bool(envKeyAlwaysWriteReviewNotes, false, "Always write review note files even if no feedback was provided (played sections only)")
 	_ = viper.BindPFlag(envKeyAlwaysWriteReviewNotes, pflag.Lookup(envKeyAlwaysWriteReviewNotes))
 
@@ -112,6 +117,7 @@ func Init() {
 	applicationConfig.ExcludeSortName = viper.GetString(envKeyExcludeSortName)
 	applicationConfig.ConfigPath = viper.GetString(envKeyUserConfigPath)
 	applicationConfig.GenerateSummaryIds = viper.GetBool(envKeyGenerateSummaryIds)
+	applicationConfig.ReviewNotesPath = viper.GetString(envKeyReviewNotesPath)
 	applicationConfig.AlwaysWriteReviewNotes = viper.GetBool(envKeyAlwaysWriteReviewNotes)
 }
 

@@ -179,7 +179,7 @@ func EnsureSession(vd *library.VideoData) {
 			FileDurations:      make(map[string]float64),
 			saveCh:             make(chan struct{}, 1),
 		}
-		rawPath := filepath.Join("review-notes", safeTitle+".raw.json")
+		rawPath := filepath.Join(getReviewNotesDir(), safeTitle+".raw.json")
 		if b, err := os.ReadFile(rawPath); err == nil {
 			json.Unmarshal(b, &s.Events)
 		}
@@ -232,7 +232,7 @@ func (s *Session) saveWorker() {
 		}
 
 		// Disk I/O performed outside of the Session lock!
-		rawPath := filepath.Join("review-notes", safeTitle+".raw.json")
+		rawPath := filepath.Join(getReviewNotesDir(), safeTitle+".raw.json")
 		b, err := json.MarshalIndent(eventsCopy, "", "  ")
 		if err != nil {
 			log.Ctx(context.Background()).Warn().Err(err).Msg("failed to marshal events")
@@ -685,7 +685,7 @@ func saveDerivedStateToFile(state DerivedState, safeTitle string, sceneTitle str
 		}
 	}
 
-	path := filepath.Join("review-notes", safeTitle+"-ReviewNote.txt")
+	path := filepath.Join(config.Application().ReviewNotesPath, safeTitle+"-ReviewNote.txt")
 	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
 		log.Ctx(context.Background()).Warn().Err(err).Msg("failed to write txt review file")
 	}

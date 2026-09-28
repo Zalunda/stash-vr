@@ -50,8 +50,26 @@ var (
 	activeConfigs   = make(map[string]Config)
 )
 
+func getConfigDir() string {
+	dir := config.Application().ConfigPath
+	if dir == "" {
+		return "MISSING_CONFIG_PATH"
+	}
+	os.MkdirAll(dir, 0755) // Ensure it exists
+	return dir
+}
+
+func getReviewNotesDir() string {
+	dir := config.Application().ReviewNotesPath
+	if dir == "" {
+		return "MISSING_REVIEW_NOTES_PATH"
+	}
+	os.MkdirAll(dir, 0755) // Ensure it exists
+	return dir
+}
+
 func LoadConfigs() {
-	pattern := filepath.Join(config.Application().ConfigPath, "*.review.json")
+	pattern := filepath.Join(getConfigDir(), "*.review.json")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		log.Error().Err(err).Str("pattern", pattern).Msg("Failed to glob review configs")
