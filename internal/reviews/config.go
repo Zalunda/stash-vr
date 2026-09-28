@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"stash-vr/internal/config"
 	"strings"
 	"sync"
 
@@ -49,14 +50,8 @@ var (
 	activeConfigs   = make(map[string]Config)
 )
 
-func init() {
-	os.MkdirAll("config", 0755)
-	os.MkdirAll("review-notes", 0755)
-	LoadConfigs()
-}
-
 func LoadConfigs() {
-	pattern := filepath.Join("config", "*.review.json")
+	pattern := filepath.Join(config.Application().ConfigPath, "*.review.json")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		log.Error().Err(err).Str("pattern", pattern).Msg("Failed to glob review configs")

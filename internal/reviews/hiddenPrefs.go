@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"stash-vr/internal/config"
 )
 
 type HiddenPrefs struct {
@@ -18,7 +19,7 @@ func GetHiddenPrefs(fileBaseName string) HiddenPrefs {
 	if fileBaseName == "" {
 		return prefs
 	}
-	b, err := os.ReadFile(filepath.Join("config", fileBaseName+".hidden.json"))
+	b, err := os.ReadFile(filepath.Join(config.Application().ConfigPath, fileBaseName+".hidden.json"))
 	if err == nil {
 		json.Unmarshal(b, &prefs)
 	}
@@ -31,6 +32,6 @@ func SaveHiddenPrefs(fileBaseName string, prefs HiddenPrefs) {
 	}
 	b, err := json.MarshalIndent(prefs, "", "  ")
 	if err == nil {
-		os.WriteFile(filepath.Join("config", fileBaseName+".hidden.json"), b, 0644)
+		os.WriteFile(filepath.Join(config.Application().ConfigPath, fileBaseName+".hidden.json"), b, 0644)
 	}
 }
