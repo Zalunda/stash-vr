@@ -24,4 +24,5 @@ services:
       #LOG_LEVEL: "debug"
       #DISABLE_LOG_COLOR: "true"
       #DISABLE_REDACT=true
-      ENABLE_PARTS_EXPANSION: "false"
+      #ENABLE_PARTS_EXPANSION: "false"
+      #ALWAYS_WRITE_REVIEW_NOTES: "false"

@@ -9,7 +9,7 @@ import (
 )
 
 func GetFilesSortedByLabel(files []*gql.ScenePartsFilesVideoFile) ([]*gql.ScenePartsFilesVideoFile, map[string]string) {
-	labels := getFileLabels(files)
+	labels := GetFileLabels(files)
 
 	sorted := make([]*gql.ScenePartsFilesVideoFile, len(files))
 	copy(sorted, files)
@@ -21,7 +21,7 @@ func GetFilesSortedByLabel(files []*gql.ScenePartsFilesVideoFile) ([]*gql.SceneP
 	return sorted, labels
 }
 
-func getFileLabels(files []*gql.ScenePartsFilesVideoFile) map[string]string {
+func GetFileLabels(files []*gql.ScenePartsFilesVideoFile) map[string]string {
 	labelsMap := make(map[string]string, len(files))
 
 	if len(files) == 0 {

@@ -3,16 +3,18 @@ package heresphere
 import (
 	"context"
 	"fmt"
-	"github.com/go-chi/chi/v5"
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"net/url"
 	"stash-vr/internal/api/internal"
 	"stash-vr/internal/library"
 	"stash-vr/internal/multipart"
+	"stash-vr/internal/reviews"
 	"stash-vr/internal/stash"
 	"stash-vr/internal/util"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 )
 
 type httpHandler struct {
@@ -113,6 +115,8 @@ func (h *httpHandler) videoDataHandler(w http.ResponseWriter, req *http.Request)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	reviews.EnsureSession(vd)
 
 	if reqErr == nil && vdReq.NeedsMediaSource != nil && *vdReq.NeedsMediaSource {
 		if fileId != "" && len(vd.SceneParts.Files) > 0 && vd.SceneParts.Files[0].Id != fileId {
@@ -279,7 +283,7 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 	videoId := parts[len(parts)-1]
 	sceneId, fileId := multipart.ParseVideoId(videoId)
 
-	vd, err := h.libraryService.GetScene(ctx, fileId, false)
+	vd, err := h.libraryService.GetScene(ctx, sceneId, false)
 	if err != nil {
 		log.Ctx(ctx).Warn().Err(err).Msg("Failed to get scene from event")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -298,10 +302,15 @@ func (h *httpHandler) eventsHandler(w http.ResponseWriter, req *http.Request) {
 		} else {
 			h.ps.handleResume()
 		}
+
+		reviews.RecordPlayStart(sceneId, multipart.GetFileLabels(vd.SceneParts.Files)[fileId], float64(ev.Time)/1000.0, h.ps.videoDuration)
+
 	case evPause, evClose:
 		if h.ps != nil {
 			h.ps.handleStop(ctx, h.libraryService, minPlayFraction)
 		}
+
+		reviews.RecordPlayStop(sceneId, multipart.GetFileLabels(vd.SceneParts.Files)[fileId], float64(ev.Time)/1000.0)
 	default:
 	}
 }

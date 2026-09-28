@@ -3,3 +3,4 @@
 /.idea/
 /graphql.config.yml
 /build/
+/cmd/stash-vr/review-notes/

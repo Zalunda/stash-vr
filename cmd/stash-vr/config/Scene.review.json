@@ -1,0 +1,24 @@
+{
+  "id": "SceneReview",
+  "name": "Scene Content & Pacing",
+  "prefix": "SCN",
+  "triggerTags": ["ReviewScene"],
+  "imports": ["SubtitleReview", "FunscriptReview", "SourceVideoReview"],
+  "timelineNotes": [
+    { "label": "Favorite Moment", "type": "range", "sentiment": "highlight" },
+    { "label": "Boring", "type": "range", "sentiment": "issue" }
+  ],
+  "globalFlags": [
+    {
+      "category": "Overall Scene Rating",
+      "type": "radio",
+      "options": [
+         "5 - Perfect", 
+         "4 - Great", 
+         "3 - Good", 
+         "2 - Fair", 
+         "1 - Poor"
+      ]
+    }
+  ]
+}

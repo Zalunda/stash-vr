@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Review Hub</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { background: #121212; color: #eee; font-family: sans-serif; padding: 20px; max-width: 1000px; margin: auto; }
+
+        /* Header */
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .header-bar h1 { margin: 0; }
+
+        /* Edit Mode Toggle */
+        .edit-toggle-label { background: #333; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 1.1em; user-select: none; border: 2px solid #555;}
+        .edit-toggle-label input { transform: scale(1.5); margin-right: 8px; cursor: pointer; }
+
+        /* Layout */
+        .section-box { border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px; background: #1a1a1a; }
+        .section-title { margin-top: 0; font-size: 1.2em; color: #bbb; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 15px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+
+        /* Cards */
+        .card { background: #242424; border: 1px solid #444; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; justify-content: space-between; transition: opacity 0.2s; }
+        .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+        .card-title { display: flex; align-items: center; font-weight: bold; font-size: 0.95em; }
+        .sentiment { font-size: 1.2em; margin-right: 6px; }
+
+        /* Badge & Animations */
+        .badge { background: #555; color: #fff; border-radius: 12px; padding: 2px 8px; font-size: 0.8em; font-weight: bold; display: inline-block; margin-left: 5px; }
+        @keyframes badgeBump {
+            0% { transform: scale(1); background: #555; }
+            50% { transform: scale(1.5); background: #4caf50; }
+            100% { transform: scale(1); background: #555; }
+        }
+        .badge-flash { animation: badgeBump 0.5s ease; }
+
+        /* Buttons */
+        .btn-row { display: flex; gap: 5px; }
+        .btn { padding: 10px; border: none; border-radius: 4px; font-size: 0.9em; font-weight: bold; cursor: pointer; color: white; background: #333; transition: background 0.2s; white-space: nowrap; }
+        .btn:active { filter: brightness(1.5); }
+        .btn-point { background: #0277bd; flex: 1; }
+        .btn-in { background: #0277bd; flex: 2; }
+        .btn-out { background: #424242; flex: 1.2; }
+
+        /* Visual Feedback class */
+        .btn.saved { background: #388e3c !important; }
+
+        /* Hide Toggles (Configuration Mode) */
+        .hide-btn { display: none; margin-left: 8px; font-size: 0.85em; font-weight: bold; cursor: pointer; background: #555; padding: 4px 8px; border-radius: 4px; border: none; color: white; }
+
+        body.config-mode .hide-btn { display: inline-flex; align-items: center; }
+        body.config-mode .hide-btn.is-hidden-btn { background: #d32f2f; }
+
+        body:not(.config-mode) .hidden-item { display: none !important; }
+        body.config-mode .hidden-item { opacity: 0.35; outline: 2px dashed #d32f2f; outline-offset: -2px; }
+
+        /* Global Flags */
+        label.flag-label { display: flex; justify-content: space-between; align-items: center; background: #2a2a2a; padding: 10px; border-radius: 5px; cursor: pointer; transition: opacity 0.2s; }
+        input[type=checkbox], input[type=radio] { margin-right: 10px; transform: scale(1.5); cursor: pointer; }
+        .error { color: #ff5252; font-weight: bold; }
+
+        /* Custom Text Input for Checkboxes */
+        .custom-text-input { grid-column: 1 / -1; padding: 10px; border-radius: 5px; border: 1px solid #444; background: #222; color: #fff; font-size: 1em; margin-top: 5px; }
+        .custom-text-input::placeholder { color: #888; }
+        .custom-text-input:focus { border-color: #0277bd; outline: none; }
+
+        /* Toast */
+        #toast { display: none; position: fixed; bottom: 20px; right: 20px; background: #388e3c; color: white; padding: 12px 24px; border-radius: 8px; font-weight: bold; font-size: 1.1em; z-index: 1000; box-shadow: 0px 4px 10px rgba(0,0,0,0.5); }
+    </style>
+</head>
+<body>
+    <div class="header-bar">
+        <h1>Review: <span id="sceneTitle">Loading...</span></h1>
+        <label class="edit-toggle-label" title="Show/Hide items you don't care about">
+            <input type="checkbox" id="configModeToggle" onchange="document.body.classList.toggle('config-mode', this.checked)"> ⚙️ Edit Mode
+        </label>
+    </div>
+
+    <div id="timelineContainer"></div>
+    <div id="flagsContainer"></div>
+    <div id="toast">✅ Saved!</div>
+
+    <script>
+        let activeSceneId = new URLSearchParams(window.location.search).get('sceneId') || '';
+
+        // Start empty; will be populated by the backend context fetch
+        let hiddenPrefs = { notes: [], noteCats: [], cats: [], opts: [] };
+
+        function getSentimentIcon(sentiment) {
+            if (sentiment === 'positive') return '👍';
+            if (sentiment === 'issue') return '👎';
+            if (sentiment === 'highlight') return '⭐';
+            return '📌';
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.style.display = 'block';
+            setTimeout(() => { toast.style.display = 'none'; }, 2000);
+        }
+
+        // Toggles visibility preference and updates UI instantly
+        function toggleHide(event, button, type, key) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            let isHidden;
+            if (hiddenPrefs[type].includes(key)) {
+                hiddenPrefs[type] = hiddenPrefs[type].filter(k => k !== key);
+                isHidden = false;
+            } else {
+                hiddenPrefs[type].push(key);
+                isHidden = true;
+            }
+
+            // Save directly to backend
+            const formData = new FormData();
+            formData.append("sceneId", activeSceneId);
+            formData.append("prefs", JSON.stringify(hiddenPrefs));
+            fetch('/review/hidden', { method: 'POST', body: formData });
+
+            button.innerText = isHidden ? '👁️ Hidden' : '👁️ Hide';
+            button.classList.toggle('is-hidden-btn', isHidden);
+
+            const container = button.closest('[data-hide-container]');
+            if (container) {
+                container.classList.toggle('hidden-item', isHidden);
+            }
+        }
+
+        fetch('/review/context?sceneId=' + activeSceneId)
+                .then(async r => {
+                    if (!r.ok) {
+                        const msg = await r.text();
+                        throw new Error(msg || "Status " + r.status);
+                    }
+                    return r.json();
+                })
+                .then(data => {
+                    activeSceneId = data.sceneId;
+                    document.getElementById('sceneTitle').innerText = data.sceneTitle || "Unknown Scene";
+
+                // Load backend-provided hidden preferences
+                if (data.hiddenPrefs) {
+                    hiddenPrefs.notes = data.hiddenPrefs.notes || [];
+                    hiddenPrefs.noteCats = data.hiddenPrefs.noteCats || [];
+                    hiddenPrefs.cats = data.hiddenPrefs.cats || [];
+                    hiddenPrefs.opts = data.hiddenPrefs.opts || [];
+                }
+
+                // 1. Calculate Occurrences Badge
+                const counts = {};
+                if (data.recordedNotes) {
+                    data.recordedNotes.forEach(n => {
+                        counts[n.note] = (counts[n.note] || 0) + 1;
+                    });
+                }
+
+                // 2. Group Notes by Category
+                const groups = {};
+                if (data.visualNotes) {
+                    data.visualNotes.forEach(n => {
+                        if (!groups[n.category]) groups[n.category] = [];
+                        groups[n.category].push(n);
+                    });
+                }
+
+                // 3. Render Timeline Notes
+                const timelineHtml = [];
+                for (const [catName, notes] of Object.entries(groups)) {
+
+                    // Add Category-level Hide Toggle
+                    const safeCatName = catName.replace(/"/g, '&quot;').replace(/'/g, "\\'");
+                    const isCatHidden = hiddenPrefs.noteCats.includes(catName);
+                    const catHiddenClass = isCatHidden ? 'hidden-item' : '';
+                    const catHideBtn = `<button class="hide-btn ${isCatHidden ? 'is-hidden-btn':''}" onclick="toggleHide(event, this, 'noteCats', '${safeCatName}')">${isCatHidden ? '👁️ Hidden' : '👁️ Hide'}</button>`;
+
+                    let section = `<div class="section-box ${catHiddenClass}" data-hide-container>` +
+                                  `<h2 class="section-title" style="display:flex; justify-content:space-between; align-items:center;">${catName} ${catHideBtn}</h2>` +
+                                  `<div class="grid">`;
+
+                    notes.forEach(n => {
+                        const count = counts[n.noteName] || 0;
+                        const badgeStyle = count > 0 ? 'display: inline-block;' : 'display: none;';
+                        const badge = `<span class="badge" style="${badgeStyle}">${count}</span>`;
+                        const icon = getSentimentIcon(n.sentiment);
+
+                        const isHidden = hiddenPrefs.notes.includes(n.noteName);
+                        const hiddenClass = isHidden ? 'hidden-item' : '';
+                        const safeNoteName = n.noteName.replace(/'/g, "\\'");
+                        const hideBtn = `<button class="hide-btn ${isHidden ? 'is-hidden-btn':''}" onclick="toggleHide(event, this, 'notes', '${safeNoteName}')">${isHidden ? '👁️ Hidden' : '👁️ Hide'}</button>`;
+
+                        section += `<div class="card ${hiddenClass}" data-hide-container><div class="card-header">` +
+                            `<div class="card-title"><span class="sentiment">${icon}</span>${n.label}</div>` +
+                            `<div>${badge}${hideBtn}</div>` +
+                            `</div><div class="btn-row">`;
+
+                        if (n.type === 'point') {
+                            section += `<button class="btn btn-point" onclick="addNote('${safeNoteName}', '${n.configId}', 'point', this)">📍 Mark</button>`;
+                        } else {
+                            section += `<button class="btn btn-in" onclick="addNote('${safeNoteName}', '${n.configId}', 'start', this)">📍 Mark [</button>` +
+                                       `<button class="btn btn-out" onclick="addNote('${safeNoteName}', '${n.configId}', 'end', this)">] Close</button>`;
+                        }
+                        section += '</div></div>';
+                    });
+
+                    section += '</div></div>';
+                    timelineHtml.push(section);
+                }
+
+                document.getElementById('timelineContainer').innerHTML = timelineHtml.join('');
+
+                // 4. Render Global Flags (Radios, Checkboxes, and Custom Text)
+                if (data.categories && data.categories.length > 0) {
+                    let flagsHtml = '<div class="section-box"><h2 class="section-title">Global Flags</h2>';
+
+                    data.categories.forEach((catDef, index) => {
+                        const safeCat = catDef.category.replace(/"/g, '&quot;').replace(/'/g, "\\'");
+                        const catIsHidden = hiddenPrefs.cats.includes(catDef.category);
+                        const catHiddenClass = catIsHidden ? 'hidden-item' : '';
+                        const catHideBtn = `<button class="hide-btn ${catIsHidden ? 'is-hidden-btn':''}" onclick="toggleHide(event, this, 'cats', '${safeCat}')">${catIsHidden ? '👁️ Hidden' : '👁️ Hide'}</button>`;
+
+                        flagsHtml += `<div class="${catHiddenClass}" data-hide-container style="margin-bottom:20px; padding-bottom:10px; border-bottom:1px solid #333;">
+                            <h3 style="display:flex; justify-content:space-between; align-items:center; margin-top:0;">
+                                ${catDef.category} ${catHideBtn}
+                            </h3>
+                            <div class="grid">`;
+
+                        const selectedForCat = (data.selectedFlags && data.selectedFlags[catDef.category]) ? data.selectedFlags[catDef.category] : [];
+                        let customTexts = [];
+
+                        if (catDef.options) {
+                            catDef.options.forEach(opt => {
+                                const isChecked = selectedForCat.includes(opt) ? 'checked' : '';
+                                const safeOpt = opt.replace(/"/g, '&quot;');
+                                const uniqueOptId = catDef.category + '::' + opt;
+                                const safeUniqueOptId = uniqueOptId.replace(/"/g, '&quot;').replace(/'/g, "\\'");
+
+                                const optIsHidden = hiddenPrefs.opts.includes(uniqueOptId);
+                                const optHiddenClass = optIsHidden ? 'hidden-item' : '';
+                                const optHideBtn = `<button class="hide-btn ${optIsHidden ? 'is-hidden-btn':''}" onclick="toggleHide(event, this, 'opts', '${safeUniqueOptId}')">${optIsHidden ? '👁️ Hidden' : '👁️ Hide'}</button>`;
+
+                                const inputType = catDef.type === 'radio' ? 'radio' : 'checkbox';
+                                const inputName = catDef.type === 'radio' ? `name="grp_${index}"` : '';
+
+                                flagsHtml += `<label class="flag-label ${optHiddenClass}" data-hide-container>
+                                    <span style="display:flex; align-items:center;">
+                                        <input type="${inputType}" ${inputName} data-cat="${safeCat}" value="${safeOpt}" onchange="submitFlags()" ${isChecked}>
+                                        ${opt}
+                                    </span>
+                                    ${optHideBtn}
+                                </label>`;
+                            });
+
+                            // Check if there are any saved values that are NOT in the predefined options
+                            selectedForCat.forEach(sel => {
+                                if (!catDef.options.includes(sel)) {
+                                    customTexts.push(sel);
+                                }
+                            });
+                        }
+
+                        // Add custom text box if it's a checkbox array
+                        if (catDef.type !== 'radio') {
+                            const customVal = customTexts.join(', ').replace(/"/g, '&quot;');
+                            flagsHtml += `<input type="text" class="custom-text-input" data-cat-text="${safeCat}" placeholder="Custom notes/flags (comma separated)..." value="${customVal}" onchange="submitFlags()">`;
+                        }
+
+                        flagsHtml += '</div></div>';
+                    });
+                    flagsHtml += '</div>';
+                    document.getElementById('flagsContainer').innerHTML = flagsHtml;
+                }
+            })
+            .catch(err => {
+                    const errorMsg = err.message.replace('Error: ', '');
+                    document.getElementById('sceneTitle').innerHTML = '<span class="error">' + errorMsg + '</span>';
+                });
+
+        function addNote(name, config, action, btnElement) {
+            const formData = new FormData();
+            formData.append("sceneId", activeSceneId);
+            formData.append("noteName", name);
+            formData.append("configName", config);
+            formData.append("action", action);
+
+            fetch('/review/note', { method: 'POST', body: formData })
+                .then(r => r.json())
+                .then(data => {
+                    const card = btnElement.closest('.card');
+                    if (!card) return;
+
+                    const badge = card.querySelector('.badge');
+
+                    // Handle Invalid action (e.g., closing a note before it starts)
+                    if (!data.success) {
+                        if (badge) {
+                            const originalText = badge.innerText;
+                            const originalDisplay = badge.style.display;
+
+                            badge.innerText = "X";
+                            badge.style.color = "#ffffff";
+                            badge.style.background = "#d32f2f";
+                            badge.style.display = 'inline-block';
+
+                            setTimeout(() => {
+                                badge.innerText = originalText;
+                                badge.style.color = "";
+                                badge.style.background = "";
+                                badge.style.display = originalDisplay;
+                            }, 1000);
+                        }
+                        return;
+                    }
+
+                    // Button Visual Feedback
+                    btnElement.classList.add('saved');
+                    setTimeout(() => { btnElement.classList.remove('saved'); }, 1000);
+
+                    // Update the badge
+                    if (badge) {
+                        badge.innerText = data.count;
+                        badge.style.display = data.count > 0 ? 'inline-block' : 'none';
+
+                        badge.classList.remove('badge-flash');
+                        void badge.offsetWidth;
+                        badge.classList.add('badge-flash');
+                    }
+                });
+        }
+
+        function submitFlags() {
+            const toggles = {};
+
+            // Gather standard inputs (Radios AND Checkboxes)
+            document.querySelectorAll('input[type=checkbox][data-cat]:checked, input[type=radio][data-cat]:checked').forEach(input => {
+                const cat = input.getAttribute('data-cat');
+                if (!toggles[cat]) toggles[cat] = [];
+                toggles[cat].push(input.value);
+            });
+
+            // Gather custom text inputs
+            document.querySelectorAll('input[type=text][data-cat-text]').forEach(txt => {
+                const cat = txt.getAttribute('data-cat-text');
+                const val = txt.value.trim();
+                if (val !== "") {
+                    if (!toggles[cat]) toggles[cat] = [];
+                    toggles[cat].push(val);
+                }
+            });
+
+            const formData = new FormData();
+            formData.append("sceneId", activeSceneId);
+            formData.append("toggles", JSON.stringify(toggles));
+
+            fetch('/review/submit', { method: 'POST', body: formData })
+                .then(() => showToast("✅ Global Flags Saved!"));
+        }
+    </script>
+</body>
+</html>

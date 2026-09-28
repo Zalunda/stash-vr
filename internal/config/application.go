@@ -1,42 +1,45 @@
 package config
 
 import (
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 	"os"
 	"strings"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 const (
-	envKeyListenAddress        = "LISTEN_ADDRESS"
-	envKeyStashGraphQLUrl      = "STASH_GRAPHQL_URL"
-	envKeyStashApiKey          = "STASH_API_KEY"
-	envKeyFavoriteTag          = "FAVORITE_TAG"
-	envKeyLogLevel             = "LOG_LEVEL"
-	envKeyDisableLogColor      = "DISABLE_LOG_COLOR"
-	envKeyDisableRedact        = "DISABLE_REDACT"
-	envKeyEnablePartsExpansion = "ENABLE_PARTS_EXPANSION"
-	envKeyForceHTTPS           = "FORCE_HTTPS"
-	envKeyHeatmapHeightPx      = "HEATMAP_HEIGHT_PX"
-	envKeyExcludeSortName      = "EXCLUDE_SORT_NAME"
-	envKeyUserConfigPath       = "CONFIG_PATH"
-	envKeyGenerateSummaryIds   = "GENERATE_SUMMARY_IDS"
+	envKeyListenAddress          = "LISTEN_ADDRESS"
+	envKeyStashGraphQLUrl        = "STASH_GRAPHQL_URL"
+	envKeyStashApiKey            = "STASH_API_KEY"
+	envKeyFavoriteTag            = "FAVORITE_TAG"
+	envKeyLogLevel               = "LOG_LEVEL"
+	envKeyDisableLogColor        = "DISABLE_LOG_COLOR"
+	envKeyDisableRedact          = "DISABLE_REDACT"
+	envKeyEnablePartsExpansion   = "ENABLE_PARTS_EXPANSION"
+	envKeyForceHTTPS             = "FORCE_HTTPS"
+	envKeyHeatmapHeightPx        = "HEATMAP_HEIGHT_PX"
+	envKeyExcludeSortName        = "EXCLUDE_SORT_NAME"
+	envKeyUserConfigPath         = "CONFIG_PATH"
+	envKeyGenerateSummaryIds     = "GENERATE_SUMMARY_IDS"
+	envKeyAlwaysWriteReviewNotes = "ALWAYS_WRITE_REVIEW_NOTES"
 )
 
 type ApplicationConfig struct {
-	ListenAddress        string
-	StashGraphQLUrl      string
-	StashApiKey          string
-	FavoriteTag          string
-	LogLevel             string
-	DisableLogColor      bool
-	IsRedactDisabled     bool
-	EnablePartsExpansion bool
-	ForceHTTPS           bool
-	HeatmapHeightPx      int
-	ExcludeSortName      string
-	ConfigPath           string
-	GenerateSummaryIds   bool
+	ListenAddress          string
+	StashGraphQLUrl        string
+	StashApiKey            string
+	FavoriteTag            string
+	LogLevel               string
+	DisableLogColor        bool
+	IsRedactDisabled       bool
+	EnablePartsExpansion   bool
+	ForceHTTPS             bool
+	HeatmapHeightPx        int
+	ExcludeSortName        string
+	ConfigPath             string
+	GenerateSummaryIds     bool
+	AlwaysWriteReviewNotes bool
 }
 
 var applicationConfig ApplicationConfig
@@ -81,6 +84,9 @@ func Init() {
 	pflag.String(envKeyGenerateSummaryIds, "", "Generate summary ids for categorized tags")
 	_ = viper.BindPFlag(envKeyGenerateSummaryIds, pflag.Lookup(envKeyGenerateSummaryIds))
 
+	pflag.Bool(envKeyAlwaysWriteReviewNotes, false, "Always write review note files even if no feedback was provided (played sections only)")
+	_ = viper.BindPFlag(envKeyAlwaysWriteReviewNotes, pflag.Lookup(envKeyAlwaysWriteReviewNotes))
+
 	pflag.BoolP("help", "h", false, "Display usage information")
 	_ = viper.BindPFlag("help", pflag.Lookup("help"))
 
@@ -106,6 +112,7 @@ func Init() {
 	applicationConfig.ExcludeSortName = viper.GetString(envKeyExcludeSortName)
 	applicationConfig.ConfigPath = viper.GetString(envKeyUserConfigPath)
 	applicationConfig.GenerateSummaryIds = viper.GetBool(envKeyGenerateSummaryIds)
+	applicationConfig.AlwaysWriteReviewNotes = viper.GetBool(envKeyAlwaysWriteReviewNotes)
 }
 
 func Application() ApplicationConfig {
