@@ -5,9 +5,20 @@
   "triggerTags": ["ReviewSubtitles"],
   "imports": [],
   "timelineNotes": [
-    { "label": "Missing", "type": "point", "sentiment": "issue" },
-    { "label": "Incoherent", "type": "range", "sentiment": "issue" },
-    { "label": "Great Impact", "type": "range", "sentiment": "positive" }
+    { "label": "Great Impact", "type": "range", "sentiment": "positive" },
+    { "label": "Missing Subtitle", "type": "point", "sentiment": "issue" },
+    { "label": "Pronoun/Context Error", "type": "range", "sentiment": "issue" },
+    { "label": "Incoherent/Confusing", "type": "range", "sentiment": "issue" },
+    { "label": "Grammar/Typo", "type": "point", "sentiment": "issue" },
+    { "label": "Too Much Text", "type": "point", "sentiment": "issue" },
+    { "label": "Over-translated / Embellished", "type": "point", "sentiment": "issue" },
+    { "label": "Out of Sync", "type": "range", "sentiment": "issue" }
   ],
-  "globalFlags": []
+  "globalFlags": [
+    {
+      "category": "Translation Quality",
+      "type": "checkbox",
+      "options": ["Flows Naturally", "Stiff/Unnatural Dialog", "Too Literal"]
+    }
+  ]
 }

@@ -5,9 +5,45 @@
   "triggerTags": [],
   "imports": [],
   "timelineNotes": [
+    { "label": "Immersion Broken", "type": "point", "sentiment": "issue" },
+    { "label": "Actor Distraction", "type": "range", "sentiment": "issue" },
+    { "label": "Camera Too Close/Far", "type": "range", "sentiment": "issue" },
     { "label": "Scale/Stereo Issue", "type": "range", "sentiment": "issue" },
-    { "label": "Bad Cut / Transition", "type": "point", "sentiment": "issue" },
-    { "label": "Actor Distraction", "type": "range", "sentiment": "issue" }
+    { "label": "Horizon/Tilt Issue", "type": "range", "sentiment": "issue" },
+    { "label": "Weird Camera Angle", "type": "range", "sentiment": "issue" },
+    { "label": "Bad Cut/Transition", "type": "point", "sentiment": "issue" },
+    { "label": "Audio Desync", "type": "range", "sentiment": "issue" },
+    { "label": "Bad Audio Mix", "type": "range", "sentiment": "issue" }
   ],
-  "globalFlags": []
-}
+  "globalFlags": [
+    {
+      "category": "Video & Editing",
+      "type": "checkbox",
+      "options": [
+        "Excellent", 
+        "Too many cuts", 
+        "Transitions skipped/jarring"
+      ]
+    },
+    {
+      "category": "Actor Performance",
+      "type": "checkbox",
+      "options": [
+        "Great Performance", 
+        "Bad/Wooden Acting", 
+        "Bored/Uninterested", 
+        "Obviously directed",
+        "Forgot the scenario"
+      ]
+    },
+    {
+      "category": "Personal Preference (Neutral)",
+      "type": "checkbox",
+      "options": [
+        "Loved the actors/premise", 
+        "Not into body type", 
+        "Not into the specific act/kink", 
+        "Character/Roleplay didn't click"
+      ]
+    }
+  ]}

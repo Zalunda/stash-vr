@@ -23,6 +23,7 @@ func Router(lib *library.Service) chi.Router {
 	r.Get("/context", h.contextHandler)
 	r.Post("/submit", h.submitHandler)
 	r.Post("/note", h.noteHandler)
+	r.Post("/hidden", h.hiddenHandler)
 	return r
 }
 
@@ -64,6 +65,7 @@ func (h *handler) contextHandler(w http.ResponseWriter, r *http.Request) {
 		"visualNotes":   session.VisualNotes,
 		"recordedNotes": flatNotes,
 		"selectedFlags": state.GlobalFlags,
+		"hiddenPrefs":   reviews.GetHiddenPrefs(session.RootConfigFileBase),
 	})
 	if err != nil {
 		log.Ctx(r.Context()).Error().Err(err).Msg("failed to write review context")
@@ -103,4 +105,23 @@ func (h *handler) noteHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) uiHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFileFS(w, r, static.Fs, "review.html")
+}
+
+func (h *handler) hiddenHandler(w http.ResponseWriter, r *http.Request) {
+	sceneId := r.FormValue("sceneId")
+	prefsJson := r.FormValue("prefs")
+
+	session, ok := reviews.GetSession(sceneId)
+	if !ok {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	var prefs reviews.HiddenPrefs
+	if err := json.Unmarshal([]byte(prefsJson), &prefs); err == nil {
+		reviews.SaveHiddenPrefs(session.RootConfigFileBase, prefs) // <-- Updated
+	} else {
+		log.Ctx(r.Context()).Warn().Err(err).Msg("failed to unmarshal hidden prefs")
+	}
+	w.WriteHeader(http.StatusOK)
 }

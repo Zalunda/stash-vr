@@ -1,20 +1,35 @@
 {
   "id": "FunscriptReview",
-  "name": "Funscript Sync & Intensity", 
+  "name": "Funscript Sync & Intensity",
   "prefix": "FS",
   "triggerTags": ["ReviewFunscript"],
   "imports": [],
   "timelineNotes": [
+    { "label": "Perfect Section", "type": "range", "sentiment": "positive" },
+    { "label": "Harsh Spike/repositionning", "type": "point", "sentiment": "issue" },
+    { "label": "Missing actions", "type": "range", "sentiment": "issue" },
     { "label": "Bad Sync", "type": "range", "sentiment": "issue" },
     { "label": "Too Intense", "type": "range", "sentiment": "issue" },
-    { "label": "Not Intense Enough", "type": "range", "sentiment": "issue" },
-    { "label": "Perfect Section", "type": "range", "sentiment": "positive" }
+    { "label": "Too Mild", "type": "range", "sentiment": "issue" }
   ],
   "globalFlags": [
     {
-      "category": "Overall Rhythm",
-      "type": "enum-custom",
-      "options": ["Robotic/Generated", "Human/Hand-scripted", "Chaotic", "Other (Type below)"]
+      "category": "Stroke Range",
+      "type": "radio",
+      "options": [
+        "Just right", 
+        "Mostly Short/Tight", 
+        "Mostly Too Intense/Wide"]
+    },
+    {
+      "category": "Scripting Nuance & Flow",
+      "type": "radio",
+      "options": [
+        "Perfectly nuanced", 
+        "Too literal (strict visual tracking only)", 
+        "Overly simplified / Missing details", 
+        "Erratic / Rough transitions"
+      ]
     }
   ]
 }

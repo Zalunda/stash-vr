@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"stash-vr/internal/config"
 	"stash-vr/internal/library"
 	"strings"
 	"sync"
@@ -67,14 +68,15 @@ type DerivedState struct {
 }
 
 type Session struct {
-	mu            sync.Mutex
-	SceneId       string
-	SceneTitle    string
-	SafeTitle     string
-	MatchedConfig Config
-	VisualNotes   []VisualNoteDef
-	FileDurations map[string]float64
-	Events        []SessionEvent
+	mu                 sync.Mutex
+	SceneId            string
+	SceneTitle         string
+	SafeTitle          string
+	RootConfigFileBase string
+	MatchedConfig      Config
+	VisualNotes        []VisualNoteDef
+	FileDurations      map[string]float64
+	Events             []SessionEvent
 
 	IsPlaying         bool
 	LastPlayRealTime  time.Time
@@ -145,21 +147,36 @@ func EnsureSession(vd *library.VideoData) {
 		mergedConfig.GlobalFlags = make([]GlobalFlagDef, 0)
 
 		for _, c := range matchedConfigs {
-			mergedConfig.GlobalFlags = append(mergedConfig.GlobalFlags, c.GlobalFlags...)
+			configName := c.Name
+			if configName == "" {
+				configName = c.Id
+			}
+			for _, flag := range c.GlobalFlags {
+				flag.Category = fmt.Sprintf("%s: %s", configName, flag.Category)
+				mergedConfig.GlobalFlags = append(mergedConfig.GlobalFlags, flag)
+			}
 		}
 		mergedConfig.GlobalFlags = removeDuplicateGlobalFlags(mergedConfig.GlobalFlags)
 
-		safeTitle := getSafeTitle(title)
-		s := &Session{
-			SceneId:       sceneId,
-			SceneTitle:    title,
-			SafeTitle:     safeTitle,
-			MatchedConfig: mergedConfig,
-			VisualNotes:   GetVisualNotes(tags),
-			FileDurations: make(map[string]float64),
-			saveCh:        make(chan struct{}, 1),
+		var rootConfigFileBase string
+		if len(matchedConfigs) > 0 {
+			// Grab the filename base from the matched root config
+			rootConfigFileBase = matchedConfigs[len(matchedConfigs)-1].FileBaseName
+		} else {
+			rootConfigFileBase = "default.review"
 		}
 
+		safeTitle := getSafeTitle(title)
+		s := &Session{
+			SceneId:            sceneId,
+			SceneTitle:         title,
+			SafeTitle:          safeTitle,
+			RootConfigFileBase: rootConfigFileBase,
+			MatchedConfig:      mergedConfig,
+			VisualNotes:        GetVisualNotes(tags),
+			FileDurations:      make(map[string]float64),
+			saveCh:             make(chan struct{}, 1),
+		}
 		rawPath := filepath.Join("review-notes", safeTitle+".raw.json")
 		if b, err := os.ReadFile(rawPath); err == nil {
 			json.Unmarshal(b, &s.Events)
@@ -198,6 +215,19 @@ func (s *Session) saveWorker() {
 		safeTitle := s.SafeTitle
 		sceneTitle := s.SceneTitle
 		s.mu.Unlock()
+
+		// Check if we should write to disk
+		hasReviewContent := false
+		for _, ev := range eventsCopy {
+			if ev.Type != EventPlayStart && ev.Type != EventPlayStop {
+				hasReviewContent = true
+				break
+			}
+		}
+
+		if !hasReviewContent && !config.Application().AlwaysWriteReviewNotes {
+			continue // Skip disk I/O entirely, it's just play/stop data!
+		}
 
 		// Disk I/O performed outside of the Session lock!
 		rawPath := filepath.Join("review-notes", safeTitle+".raw.json")
@@ -502,18 +532,21 @@ func (s *Session) deriveInternal() DerivedState {
 func formatTimeSec(sec float64) string {
 	h := int(sec) / 3600
 	m := (int(sec) % 3600) / 60
-	s := int(sec) % 60
-	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+	sFloat := math.Mod(sec, 60.0)
+
+	// %04.1f guarantees 4 characters total (e.g., "05.4") with 1 decimal place
+	return fmt.Sprintf("%02d:%02d:%04.1f", h, m, sFloat)
 }
 
 func formatDurationSec(sec float64) string {
 	h := int(sec) / 3600
 	m := (int(sec) % 3600) / 60
-	s := int(sec) % 60
+	sFloat := math.Mod(sec, 60.0)
+
 	if h > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+		return fmt.Sprintf("%d:%02d:%04.1f", h, m, sFloat)
 	}
-	return fmt.Sprintf("%d:%02d", m, s)
+	return fmt.Sprintf("%d:%04.1f", m, sFloat)
 }
 
 func saveDerivedStateToFile(state DerivedState, safeTitle string, sceneTitle string) {
@@ -603,7 +636,7 @@ func saveDerivedStateToFile(state DerivedState, safeTitle string, sceneTitle str
 			if n.EndTime != nil && *n.EndTime > n.StartTime {
 				timeStr = fmt.Sprintf("%s->%s", timeStr, formatTimeSec(*n.EndTime))
 			}
-			b.WriteString(fmt.Sprintf("%s: %-19s %s\n", n.FileLabel, timeStr, n.Note))
+			b.WriteString(fmt.Sprintf("%s: %-23s %s\n", n.FileLabel, timeStr, n.Note))
 		}
 		b.WriteString("\n")
 

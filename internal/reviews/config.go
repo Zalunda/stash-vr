@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 type TimelineNoteDef struct {
@@ -22,12 +23,13 @@ type GlobalFlagDef struct {
 
 type Config struct {
 	Id            string            `json:"id"`
-	Name          string            `json:"name"` // Optional clean name for UI groupings
+	Name          string            `json:"name"`
 	Prefix        string            `json:"prefix"`
 	TriggerTags   []string          `json:"triggerTags"`
 	Imports       []string          `json:"imports"`
 	TimelineNotes []TimelineNoteDef `json:"timelineNotes"`
 	GlobalFlags   []GlobalFlagDef   `json:"globalFlags"`
+	FileBaseName  string            `json:"-"`
 }
 
 type VisualNoteDef struct {
@@ -42,7 +44,6 @@ type VisualNoteDef struct {
 var activeConfigs = make(map[string]Config)
 
 func init() {
-	// Create the required folders
 	os.MkdirAll("config", 0755)
 	os.MkdirAll("review-notes", 0755)
 	LoadConfigs()
@@ -56,6 +57,8 @@ func LoadConfigs() {
 		if err == nil {
 			var c Config
 			if json.Unmarshal(b, &c) == nil {
+				base := filepath.Base(f)
+				c.FileBaseName = strings.TrimSuffix(base, ".json")
 				activeConfigs[c.Id] = c
 			}
 		}
@@ -108,12 +111,16 @@ func GetMatchedConfigs(sceneTags []string) []Config {
 			return
 		}
 		visited[c.Id] = true
-		result = append(result, c)
+
+		// 1. Visit dependencies FIRST (Post-order traversal)
 		for _, imp := range c.Imports {
 			if imported, ok := activeConfigs[imp]; ok {
 				visit(imported)
 			}
 		}
+
+		// 2. Append this config AFTER its dependencies
+		result = append(result, c)
 	}
 
 	for _, c := range startNodes {

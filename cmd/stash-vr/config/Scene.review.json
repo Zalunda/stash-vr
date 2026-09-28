@@ -5,8 +5,20 @@
   "triggerTags": ["ReviewScene"],
   "imports": ["SubtitleReview", "FunscriptReview", "SourceVideoReview"],
   "timelineNotes": [
-    { "label": "Boring", "type": "range", "sentiment": "issue" },
-    { "label": "Favorite Moment", "type": "range", "sentiment": "highlight" }
+    { "label": "Favorite Moment", "type": "range", "sentiment": "highlight" },
+    { "label": "Boring", "type": "range", "sentiment": "issue" }
   ],
-  "globalFlags": []
+  "globalFlags": [
+    {
+      "category": "Overall Scene Rating",
+      "type": "radio",
+      "options": [
+         "5 - Perfect", 
+         "4 - Great", 
+         "3 - Good", 
+         "2 - Fair", 
+         "1 - Poor"
+      ]
+    }
+  ]
 }
