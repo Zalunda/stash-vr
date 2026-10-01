@@ -10,6 +10,7 @@ import (
 	"sort"
 	"stash-vr/internal/config"
 	"stash-vr/internal/library"
+	"stash-vr/internal/multipart"
 	"strings"
 	"sync"
 	"time"
@@ -169,6 +170,13 @@ func EnsureSession(vd *library.VideoData) {
 		}
 
 		safeTitle := getSafeTitle(title)
+
+		fileDurations := make(map[string]float64)
+		labels := multipart.GetFileLabels(vd.SceneParts.Files)
+		for _, f := range vd.SceneParts.Files {
+			fileDurations[getLabelOrDefault(labels[f.Id])] = f.Duration
+		}
+
 		s := &Session{
 			SceneId:            sceneId,
 			SceneTitle:         title,
@@ -176,7 +184,7 @@ func EnsureSession(vd *library.VideoData) {
 			RootConfigFileBase: rootConfigFileBase,
 			MatchedConfig:      mergedConfig,
 			VisualNotes:        GetVisualNotes(tags),
-			FileDurations:      make(map[string]float64),
+			FileDurations:      fileDurations,
 			saveCh:             make(chan struct{}, 1),
 		}
 		rawPath := filepath.Join(getReviewNotesDir(), safeTitle+".raw.json")
@@ -240,7 +248,7 @@ func (s *Session) saveWorker() {
 			log.Ctx(context.Background()).Warn().Err(err).Msg("failed to write raw events file")
 		}
 
-		saveDerivedStateToFile(state, safeTitle, sceneTitle)
+		s.saveDerivedStateToFile(state, safeTitle, sceneTitle)
 	}
 }
 
@@ -551,66 +559,106 @@ func formatDurationSec(sec float64) string {
 	return fmt.Sprintf("%d:%04.1f", m, sFloat)
 }
 
-func saveDerivedStateToFile(state DerivedState, safeTitle string, sceneTitle string) {
+func (s *Session) saveDerivedStateToFile(state DerivedState, safeTitle string, sceneTitle string) {
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("Scene: %s\n\n", sceneTitle))
 
-	if len(state.Played) > 0 {
+	// Gather ALL unique labels (from pre-populated file durations + played state)
+	labelSet := make(map[string]bool)
+	for lbl := range s.FileDurations {
+		labelSet[lbl] = true
+	}
+	for lbl := range state.Played {
+		labelSet[lbl] = true
+	}
+
+	var labels []string
+	for lbl := range labelSet {
+		labels = append(labels, lbl)
+	}
+	sort.Strings(labels)
+
+	if len(labels) > 0 {
 		b.WriteString("Played:\n")
-		var labels []string
-		for lbl := range state.Played {
-			labels = append(labels, lbl)
-		}
-		sort.Strings(labels)
 
 		for _, lbl := range labels {
 			intervals := state.Played[lbl]
+			fileDuration := s.FileDurations[lbl]
 
-			var lastSolidEnd float64 = -1.0
+			// Completely Unwatched File Part
+			if len(intervals) == 0 {
+				if fileDuration > 0 {
+					b.WriteString(fmt.Sprintf("%s: %s-%s [%s] NOT WATCHED\n",
+						lbl, formatTimeSec(0), formatTimeSec(fileDuration), formatTimeSec(fileDuration)))
+				} else {
+					b.WriteString(fmt.Sprintf("%s: NOT WATCHED\n", lbl))
+				}
+				continue
+			}
+
+			var lastSolidEnd float64 = 0.0
 			var hasMicroPlays bool = false
 			var solidCount int = 0
 
 			for _, inv := range intervals {
 				duration := inv.End - inv.Start
 
-				// Filter out micro-plays (scrubbing/skipping)
+				// Filter out micro-plays (scrubbing/skipping) and save for the gap context
 				if duration <= 3.0 {
 					hasMicroPlays = true
 					continue
 				}
 
 				solidCount++
-				gapText := ""
+				gap := inv.Start - lastSolidEnd
 
-				if lastSolidEnd != -1.0 {
-					gap := inv.Start - lastSolidEnd
-					if gap > 2.0 {
-						// If they scrubbed through this gap, it's a skip. If they just clicked ahead, it's a jump.
-						if hasMicroPlays {
-							gapText = fmt.Sprintf(" SKIPPED %s", formatDurationSec(gap))
-						} else {
-							gapText = fmt.Sprintf(" JUMPED %s", formatDurationSec(gap))
-						}
-					}
-				} else if inv.Start > 5.0 {
-					// Gap before the very first play block starts
+				// Determine what happened during the gap
+				if gap > 2.0 {
 					if hasMicroPlays {
-						gapText = fmt.Sprintf(" SKIPPED %s", formatDurationSec(inv.Start))
+						b.WriteString(fmt.Sprintf("%s: %s-%s [%s] FAST-FORWARDED\n",
+							lbl, formatTimeSec(lastSolidEnd), formatTimeSec(inv.Start), formatTimeSec(gap)))
 					} else {
-						gapText = fmt.Sprintf(" JUMPED %s", formatDurationSec(inv.Start))
+						b.WriteString(fmt.Sprintf("%s: %s-%s [%s] SKIPPED\n",
+							lbl, formatTimeSec(lastSolidEnd), formatTimeSec(inv.Start), formatTimeSec(gap)))
 					}
 				}
 
-				b.WriteString(fmt.Sprintf("%s: %s-%s%s\n", lbl, formatTimeSec(inv.Start), formatTimeSec(inv.End), gapText))
+				// Record the actual watched segment
+				b.WriteString(fmt.Sprintf("%s: %s-%s [%s] WATCHED\n",
+					lbl, formatTimeSec(inv.Start), formatTimeSec(inv.End), formatTimeSec(duration)))
 
 				lastSolidEnd = inv.End
-				hasMicroPlays = false
+				hasMicroPlays = false // Reset microplays for the next gap
 			}
 
-			// If they opened the file and ONLY fast forwarded through it without ever stopping
-			if solidCount == 0 && hasMicroPlays {
-				b.WriteString(fmt.Sprintf("%s: SCRUBBED ONLY\n", lbl))
+			// Handle the trailing part of the timeline
+			if solidCount == 0 {
+				if hasMicroPlays {
+					if fileDuration > 0 {
+						b.WriteString(fmt.Sprintf("%s: %s-%s [%s] SCRUBBED ONLY\n",
+							lbl, formatTimeSec(0), formatTimeSec(fileDuration), formatTimeSec(fileDuration)))
+					} else {
+						b.WriteString(fmt.Sprintf("%s: SCRUBBED ONLY\n", lbl))
+					}
+				} else {
+					if fileDuration > 0 {
+						b.WriteString(fmt.Sprintf("%s: %s-%s [%s] NOT WATCHED\n",
+							lbl, formatTimeSec(0), formatTimeSec(fileDuration), formatTimeSec(fileDuration)))
+					} else {
+						b.WriteString(fmt.Sprintf("%s: NOT WATCHED\n", lbl))
+					}
+				}
+			} else {
+				if fileDuration > 0 && fileDuration-lastSolidEnd > 2.0 {
+					remDur := fileDuration - lastSolidEnd
+					b.WriteString(fmt.Sprintf("%s: %s-%s [%s] NOT WATCHED\n",
+						lbl, formatTimeSec(lastSolidEnd), formatTimeSec(fileDuration), formatTimeSec(remDur)))
+				} else if fileDuration == 0 {
+					// Fallback if Stash didn't provide a duration
+					b.WriteString(fmt.Sprintf("%s: %s-<END> NOT WATCHED\n",
+						lbl, formatTimeSec(lastSolidEnd)))
+				}
 			}
 		}
 		b.WriteString("\n")
@@ -623,7 +671,7 @@ func saveDerivedStateToFile(state DerivedState, safeTitle string, sceneTitle str
 
 	if len(allNotes) > 0 {
 		b.WriteString("========================================\n")
-		b.WriteString("           TIMELINE LOG\n")
+		b.WriteString("              TIMELINE LOG\n")
 		b.WriteString("========================================\n")
 
 		sort.Slice(allNotes, func(i, j int) bool {
@@ -641,40 +689,40 @@ func saveDerivedStateToFile(state DerivedState, safeTitle string, sceneTitle str
 			b.WriteString(fmt.Sprintf("%s: %-23s %s\n", n.FileLabel, timeStr, n.Note))
 		}
 		b.WriteString("\n")
+	}
 
-		b.WriteString("========================================\n")
-		b.WriteString("         FEEDBACK SUMMARY\n")
-		b.WriteString("========================================\n")
+	b.WriteString("========================================\n")
+	b.WriteString("            FEEDBACK SUMMARY\n")
+	b.WriteString("========================================\n")
 
-		summary := make(map[string]map[string][]string)
-		for _, n := range allNotes {
-			sent := "General"
-			if n.Sentiment != "" {
-				sent = n.Sentiment
-			}
-
-			if summary[sent] == nil {
-				summary[sent] = make(map[string][]string)
-			}
-
-			timeStr := formatTimeSec(n.StartTime)
-			if n.EndTime != nil && *n.EndTime > n.StartTime {
-				timeStr = fmt.Sprintf("%s->%s", timeStr, formatTimeSec(*n.EndTime))
-			}
-			summary[sent][n.Note] = append(summary[sent][n.Note], fmt.Sprintf("  - %s: %s", n.FileLabel, timeStr))
+	summary := make(map[string]map[string][]string)
+	for _, n := range allNotes {
+		sent := "General"
+		if n.Sentiment != "" {
+			sent = n.Sentiment
 		}
 
-		printCategory(&b, summary, "issue", "--- ISSUES & CRITIQUES ---")
-		printCategory(&b, summary, "positive", "--- POSITIVES & HIGHLIGHTS ---")
-		printCategory(&b, summary, "General", "--- OTHER NOTES ---")
+		if summary[sent] == nil {
+			summary[sent] = make(map[string][]string)
+		}
+
+		timeStr := formatTimeSec(n.StartTime)
+		if n.EndTime != nil && *n.EndTime > n.StartTime {
+			timeStr = fmt.Sprintf("%s->%s", timeStr, formatTimeSec(*n.EndTime))
+		}
+		summary[sent][n.Note] = append(summary[sent][n.Note], fmt.Sprintf("  - %s: %s", n.FileLabel, timeStr))
 	}
+
+	printCategory(&b, summary, "issue", "--- ISSUES & CRITIQUES ---")
+	printCategory(&b, summary, "positive", "--- POSITIVES & HIGHLIGHTS ---")
+	printCategory(&b, summary, "General", "--- OTHER NOTES ---")
 
 	hasFlags := false
 	for cat, flags := range state.GlobalFlags {
 		if len(flags) > 0 {
 			if !hasFlags {
 				b.WriteString("========================================\n")
-				b.WriteString("           GLOBAL FLAGS\n")
+				b.WriteString("              GLOBAL FLAGS\n")
 				b.WriteString("========================================\n")
 				hasFlags = true
 			}
